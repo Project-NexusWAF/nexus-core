@@ -1,0 +1,89 @@
+[workspace]
+members = [
+  "nexus-common"
+]
+
+resolver = "2"
+
+[workspace.package]
+version     = "0.1.0"
+edition     = "2021"
+authors     = ["NexusWAF Team"]
+license     = "MIT"
+repository  = "https://github.com/Project-NexusWAF/nexus-core"
+
+# Shared dependency versions — single source of truth
+[workspace.dependencies]
+# Async
+tokio        = { version = "1.38", features = ["full"] }
+tokio-util   = { version = "0.7", features = ["codec"] }
+
+# HTTP / Proxy
+axum         = { version = "0.7", features = ["tracing"] }
+hyper        = { version = "1.3", features = ["full"] }
+hyper-util   = { version = "0.1", features = ["tokio", "client", "client-legacy"] }
+http         = "1.1"
+http-body-util = "0.1"
+tower        = { version = "0.4", features = ["full"] }
+tower-http   = { version = "0.5", features = ["trace", "cors", "timeout"] }
+
+# gRPC
+tonic        = "0.11"
+tonic-build  = "0.11"
+prost        = "0.12"
+
+# Serialization
+serde        = { version = "1", features = ["derive"] }
+serde_json   = "1"
+toml         = "0.8"
+
+# Error handling
+thiserror    = "1"
+anyhow       = "1"
+
+# Observability
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+prometheus         = { version = "0.13", features = ["process"] }
+once_cell          = "1"
+
+# Concurrency
+dashmap      = "5"
+parking_lot  = "0.12"
+
+# Parsing
+regex        = "1"
+nom          = "7"
+
+# Misc
+uuid         = { version = "1", features = ["v4", "serde"] }
+chrono       = { version = "0.4", features = ["serde"] }
+bytes        = "1"
+futures      = "0.3"
+async-trait  = "0.1"
+rand         = "0.8"
+
+# Internal crates
+nexus-common  = { path = "nexus-common" }
+nexus-config  = { path = "nexus-config" }
+nexus-rate    = { path = "nexus-rate" }
+nexus-lexical = { path = "nexus-lexical" }
+nexus-grammar = { path = "nexus-grammar" }
+nexus-rules   = { path = "nexus-rules" }
+nexus-lb      = { path = "nexus-lb" }
+nexus-metrics = { path = "nexus-metrics" }
+nexus-ml-client = { path = "nexus-ml-client" }
+nexus-control = { path = "nexus-control" }
+nexus-pipeline = { path = "nexus-pipeline" }
+
+
+[profile.release]
+opt-level     = 3
+lto           = true
+codegen-units = 1
+panic         = "abort"
+strip         = true
+
+[profile.dev]
+opt-level = 0
+debug     = true
