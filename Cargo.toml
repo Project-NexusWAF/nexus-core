@@ -1,6 +1,7 @@
 [workspace]
 members = [
-  "nexus-common"
+  "nexus-common", 
+  "nexus-config",
 ]
 
 resolver = "2"
@@ -54,6 +55,7 @@ parking_lot  = "0.12"
 # Parsing
 regex        = "1"
 nom          = "7"
+toml_edit     = "1"
 
 # Misc
 uuid         = { version = "1", features = ["v4", "serde"] }
