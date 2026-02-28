@@ -1,3 +1,8 @@
+/// The central data structure that flows through every layer of the pipeline.
+///
+/// Built once at the gateway from an incoming HTTP request, then passed
+/// (by mutable reference) through each layer. Layers annotate it with
+/// findings; the pipeline makes the final decision.
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::time::Instant;
