@@ -1,0 +1,241 @@
+version = "1.0.0"
+
+# Example security rules for NexusWAF
+# This file demonstrates various rule types and patterns
+
+# ============================================================================
+# WHITELISTING RULES (Low Priority - Execute First)
+# ============================================================================
+
+[[rules]]
+id = "R001"
+name = "Allow health checks"
+enabled = true
+priority = 5
+action = "allow"
+description = "Whitelist monitoring and health check endpoints"
+
+[rules.condition]
+type = "or"
+conditions = [
+    { type = "path_exact", value = "/health" },
+    { type = "path_exact", value = "/status" },
+    { type = "path_exact", value = "/ping" }
+]
+
+[[rules]]
+id = "R002"
+name = "Allow internal IPs"
+enabled = true
+priority = 5
+action = "allow"
+description = "Trust requests from internal network"
+
+[rules.condition]
+type = "ip_in_range"
+cidrs = ["10.0.0.0/8", "192.168.0.0/16", "172.16.0.0/12"]
+
+# ============================================================================
+# ACCESS CONTROL RULES
+# ============================================================================
+
+[[rules]]
+id = "R010"
+name = "Block external admin access"
+enabled = true
+priority = 10
+action = "block"
+description = "Prevent admin panel access from public internet"
+
+[rules.condition]
+type = "and"
+conditions = [
+    { type = "path_prefix", value = "/admin" },
+    { type = "not", condition = { type = "ip_in_range", cidrs = ["10.0.0.0/8", "192.168.0.0/16", "172.16.0.0/12"] } }
+]
+
+[[rules]]
+id = "R011"
+name = "Require auth for API"
+enabled = true
+priority = 10
+action = "block"
+description = "Block API requests without authorization header"
+
+[rules.condition]
+type = "and"
+conditions = [
+    { type = "path_prefix", value = "/api" },
+    { type = "not", condition = { type = "header_contains", header = "authorization", value = "Bearer" } }
+]
+
+# ============================================================================
+# THREAT DETECTION RULES
+# ============================================================================
+
+[[rules]]
+id = "R020"
+name = "Block SQL injection patterns"
+enabled = true
+priority = 20
+action = "block"
+description = "Detect common SQL injection patterns in URI"
+
+[rules.condition]
+type = "regex_match"
+target = "uri"
+pattern = "(?i)(union.*select|drop.*table|insert.*into|delete.*from|;.*--)"
+
+[[rules]]
+id = "R021"
+name = "Block XSS attempts"
+enabled = true
+priority = 20
+action = "block"
+description = "Detect cross-site scripting patterns"
+
+[rules.condition]
+type = "regex_match"
+target = "uri"
+pattern = "(?i)(<script|javascript:|onerror=|onload=)"
+
+[[rules]]
+id = "R022"
+name = "Block path traversal"
+enabled = true
+priority = 20
+action = "block"
+description = "Prevent directory traversal attacks"
+
+[rules.condition]
+type = "regex_match"
+target = "uri"
+pattern = "(\\.\\./|\\.\\.\\\\)"
+
+# ============================================================================
+# RISK-BASED RULES
+# ============================================================================
+
+[[rules]]
+id = "R030"
+name = "Block high-risk requests"
+enabled = true
+priority = 30
+action = "block"
+description = "Block requests with risk score above 0.8"
+
+[rules.condition]
+type = "risk_above"
+threshold = 0.8
+
+[[rules]]
+id = "R031"
+name = "Log medium-risk requests"
+enabled = true
+priority = 30
+action = "log"
+description = "Log requests with elevated risk for analysis"
+
+[rules.condition]
+type = "risk_above"
+threshold = 0.5
+
+# ============================================================================
+# METHOD-BASED RULES
+# ============================================================================
+
+[[rules]]
+id = "R040"
+name = "Restrict DELETE method"
+enabled = true
+priority = 40
+action = "block"
+description = "Only allow DELETE from admin endpoints"
+
+[rules.condition]
+type = "and"
+conditions = [
+    { type = "method_is", methods = ["DELETE"] },
+    { type = "not", condition = { type = "path_prefix", value = "/admin" } }
+]
+
+# ============================================================================
+# USER-AGENT FILTERING
+# ============================================================================
+
+[[rules]]
+id = "R050"
+name = "Block bad bots"
+enabled = true
+priority = 50
+action = "block"
+description = "Block known malicious user agents"
+
+[rules.condition]
+type = "or"
+conditions = [
+    { type = "header_contains", header = "user-agent", value = "sqlmap" },
+    { type = "header_contains", header = "user-agent", value = "nikto" },
+    { type = "header_contains", header = "user-agent", value = "havij" },
+    { type = "header_contains", header = "user-agent", value = "acunetix" }
+]
+
+# ============================================================================
+# TAG-BASED RULES
+# ============================================================================
+
+[[rules]]
+id = "R060"
+name = "Block tagged threats"
+enabled = true
+priority = 60
+action = "block"
+description = "Block requests tagged by other layers"
+
+[rules.condition]
+type = "or"
+conditions = [
+    { type = "has_tag", tag = "sqli" },
+    { type = "has_tag", tag = "xss" },
+    { type = "has_tag", tag = "rce" }
+]
+
+# ============================================================================
+# COMPLEX RULES
+# ============================================================================
+
+[[rules]]
+id = "R070"
+name = "Suspicious POST to sensitive endpoints"
+enabled = true
+priority = 70
+action = "log"
+description = "Log POST requests to sensitive paths from external IPs"
+
+[rules.condition]
+type = "and"
+conditions = [
+    { type = "method_is", methods = ["POST", "PUT"] },
+    { type = "or", conditions = [
+        { type = "path_prefix", value = "/admin" },
+        { type = "path_prefix", value = "/config" },
+        { type = "path_prefix", value = "/settings" }
+    ]},
+    { type = "not", condition = { type = "ip_in_range", cidrs = ["10.0.0.0/8"] } }
+]
+
+# ============================================================================
+# DISABLED EXAMPLE
+# ============================================================================
+
+[[rules]]
+id = "R999"
+name = "Test rule - disabled"
+enabled = false
+priority = 999
+action = "block"
+description = "Example of a disabled rule for testing"
+
+[rules.condition]
+type = "path_exact"
+value = "/test"

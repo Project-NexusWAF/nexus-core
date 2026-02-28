@@ -5,7 +5,7 @@ mod layer;
 mod utils;
 
 pub use context::RequestContext;
-pub use decision::Decision;
+pub use decision::{BlockCode, Decision};
 pub use error::{NexusError, Result};
-pub use layer::Layer;
+pub use layer::{InnerLayer, Layer};
 pub use utils::{sanitise_for_log, ScopedTimer};

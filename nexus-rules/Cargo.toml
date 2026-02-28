@@ -1,0 +1,22 @@
+[package]
+name        = "nexus-rules"
+description = "Rule engine for NexusWAF - evaluates security policies"
+version.workspace     = true
+edition.workspace     = true
+authors.workspace     = true
+license.workspace     = true
+
+[dependencies]
+nexus-common = { workspace = true }
+nexus-config = { workspace = true }
+serde        = { workspace = true }
+toml         = { workspace = true }
+tracing      = { workspace = true }
+async-trait  = { workspace = true }
+parking_lot  = { workspace = true }
+regex        = { workspace = true }
+thiserror    = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tempfile = "3"

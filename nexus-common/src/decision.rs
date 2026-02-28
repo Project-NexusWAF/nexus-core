@@ -31,6 +31,14 @@ impl Decision {
   pub fn is_allowing(&self) -> bool {
     matches!(self, Decision::Allow | Decision::Log { .. })
   }
+  /// Alias for is_blocking() - used by some tests
+  pub fn is_blocked(&self) -> bool {
+    self.is_blocking()
+  }
+  /// Alias for is_allowing() - used by some tests  
+  pub fn is_allowed(&self) -> bool {
+    self.is_allowing()
+  }
   pub fn merge(self, other: Decision) -> Decision {
     match (&self, &other) {
       (Decision::Block { .. }, _) => self,
