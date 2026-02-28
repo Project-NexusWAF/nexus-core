@@ -1,4 +1,4 @@
-use crate::rule::{Rule, RuleAction, RuleSet};
+use crate::rule::{RuleAction, RuleSet};
 use nexus_common::{BlockCode, Decision, RequestContext};
 use parking_lot::RwLock;
 use std::path::Path;
@@ -40,7 +40,7 @@ impl RuleEngine {
                         );
                         return Ok(Decision::block(
                             format!("Rule {} matched: {}", rule.id, rule.name),
-                            BlockCode::PolicyViolation,
+                            BlockCode::ProtocolViolation,
                         ));
                     }
                     RuleAction::Allow => {
@@ -90,7 +90,7 @@ impl RuleEngine {
     /// Get the count of currently active rules
     pub fn active_rule_count(&self) -> usize {
         let ruleset = self.ruleset.read();
-        ruleset.active_rules().len()
+        ruleset.active_rules().count()
     }
 
     /// Get the current ruleset version
@@ -107,7 +107,7 @@ mod tests {
     use crate::rule::Rule;
     use bytes::Bytes;
     use http::{HeaderMap, Method, Version};
-    use std::io::Write;
+    use std::io::{Seek, Write};
     use std::net::{IpAddr, Ipv4Addr};
     use tempfile::NamedTempFile;
 
@@ -122,7 +122,8 @@ mod tests {
         )
     }
 
-    fn make_ruleset(rules: Vec<Rule>) -> RuleSet {
+    fn make_ruleset(mut rules: Vec<Rule>) -> RuleSet {
+        rules.sort_by_key(|r| r.priority);
         RuleSet {
             rules,
             version: "test".to_string(),
@@ -348,7 +349,7 @@ value = "/new"
 
         // Update file
         temp_file.seek(std::io::SeekFrom::Start(0)).unwrap();
-        temp_file.set_len(0).unwrap();
+        temp_file.as_file_mut().set_len(0).unwrap();
         temp_file.write_all(updated_toml.as_bytes()).unwrap();
         temp_file.flush().unwrap();
 

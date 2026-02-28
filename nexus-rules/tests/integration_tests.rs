@@ -1,11 +1,10 @@
 /// Integration tests for the nexus-rules crate
 use bytes::Bytes;
 use http::{HeaderMap, Method, Version};
-use nexus_common::RequestContext;
-use nexus_rules::{Condition, Rule, RuleAction, RuleEngine, RuleLayer, RuleSet};
+use nexus_common::{InnerLayer, RequestContext};
+use nexus_rules::{Condition, ParsedCidr, Rule, RuleAction, RuleEngine, RuleLayer, RuleSet};
 use std::io::Write;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::sync::Arc;
+use std::net::{IpAddr, Ipv4Addr};
 use tempfile::NamedTempFile;
 
 fn make_ctx(uri: &str, method: Method, ip: IpAddr) -> RequestContext {
@@ -152,7 +151,7 @@ value = "/"
 
     // Test 5: SQL injection pattern should be blocked
     let mut ctx = make_ctx(
-        "http://example.com/search?q=1' UNION SELECT * FROM users--",
+        "http://example.com/search?q=1%27%20UNION%20SELECT%20*%20FROM%20users--",
         Method::GET,
         IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
     );
@@ -183,7 +182,7 @@ fn test_ipv6_cidr_ranges() {
             action: RuleAction::Block,
             description: String::new(),
             condition: Condition::IpInRange {
-                cidrs: vec!["2001:db8::/32".to_string()],
+                cidrs: vec![ParsedCidr::parse("2001:db8::/32").unwrap()],
             },
         }],
     };
@@ -226,7 +225,7 @@ fn test_complex_nested_conditions() {
                     Condition::And {
                         conditions: vec![
                             Condition::MethodIs {
-                                methods: vec!["DELETE".to_string()],
+                                methods: vec![Method::DELETE],
                             },
                             Condition::PathPrefix {
                                 value: "/api".to_string(),
@@ -263,7 +262,7 @@ fn test_complex_nested_conditions() {
         Method::GET,
         IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
     );
-    ctx.threat_tags.push("suspicious".to_string());
+    ctx.threat_tags.insert("suspicious".to_string());
     ctx.risk_score = 0.8;
     let decision = engine.evaluate(&mut ctx).unwrap();
     assert!(decision.is_blocked());
@@ -283,7 +282,7 @@ fn test_complex_nested_conditions() {
         Method::GET,
         IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
     );
-    ctx.threat_tags.push("suspicious".to_string());
+    ctx.threat_tags.insert("suspicious".to_string());
     ctx.risk_score = 0.3;
     let decision = engine.evaluate(&mut ctx).unwrap();
     assert!(decision.is_allowed());
@@ -325,9 +324,9 @@ fn test_header_matching() {
     assert!(decision.is_blocked());
 }
 
-#[tokio::test]
-async fn test_rule_layer_integration() {
-    use nexus_common::Layer;
+#[test]
+fn test_rule_layer_integration() {
+    use futures::executor::block_on;
 
     let ruleset = RuleSet {
         version: "1.0.0".to_string(),
@@ -356,7 +355,7 @@ async fn test_rule_layer_integration() {
         IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
     );
 
-    let decision = layer.analyse(&mut ctx).await.unwrap();
+    let decision = block_on(layer.analyse(&mut ctx)).unwrap();
     assert!(decision.is_blocked());
     assert_eq!(ctx.flagged_by, Some("rules".to_string()));
 }

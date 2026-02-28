@@ -1,8 +1,86 @@
+use dashmap::DashMap;
+use http::Method;
 use nexus_common::RequestContext;
+use once_cell::sync::Lazy;
 use regex::Regex;
-use serde::{Deserialize, Serialize};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::sync::OnceLock;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::net::IpAddr;
+use std::sync::Arc;
+
+/// Pre-parsed CIDR range for efficient IP matching
+#[derive(Debug, Clone)]
+pub struct ParsedCidr {
+    network: IpAddr,
+    prefix_len: u8,
+}
+
+impl ParsedCidr {
+    /// Parse a CIDR string (e.g., "192.168.0.0/24") into a structured format
+    pub fn parse(cidr: &str) -> Option<Self> {
+        let parts: Vec<&str> = cidr.split('/').collect();
+        if parts.len() != 2 {
+            return None;
+        }
+
+        let network: IpAddr = parts[0].parse().ok()?;
+        let prefix_len: u8 = parts[1].parse().ok()?;
+
+        // Validate prefix length
+        match network {
+            IpAddr::V4(_) if prefix_len > 32 => return None,
+            IpAddr::V6(_) if prefix_len > 128 => return None,
+            _ => {}
+        }
+
+        Some(Self { network, prefix_len })
+    }
+
+    /// Check if an IP address is within this CIDR range
+    pub fn contains(&self, ip: &IpAddr) -> bool {
+        match (ip, self.network) {
+            (IpAddr::V4(ip4), IpAddr::V4(net4)) => {
+                if self.prefix_len == 0 {
+                    return true;
+                }
+                let ip_bits = u32::from(*ip4);
+                let net_bits = u32::from(net4);
+                let mask = !0u32 << (32 - self.prefix_len);
+                (ip_bits & mask) == (net_bits & mask)
+            }
+            (IpAddr::V6(ip6), IpAddr::V6(net6)) => {
+                if self.prefix_len == 0 {
+                    return true;
+                }
+                let ip_bits = u128::from(*ip6);
+                let net_bits = u128::from(net6);
+                let mask = !0u128 << (128 - self.prefix_len);
+                (ip_bits & mask) == (net_bits & mask)
+            }
+            _ => false, // Mixed IP versions
+        }
+    }
+}
+
+impl Serialize for ParsedCidr {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let cidr_str = format!("{}/{}", self.network, self.prefix_len);
+        serializer.serialize_str(&cidr_str)
+    }
+}
+
+impl<'de> Deserialize<'de> for ParsedCidr {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        ParsedCidr::parse(&s)
+            .ok_or_else(|| serde::de::Error::custom(format!("Invalid CIDR format: {}", s)))
+    }
+}
 
 /// A condition that can be evaluated against a request
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -15,13 +93,19 @@ pub enum Condition {
     PathExact { value: String },
 
     /// Match if HTTP method is in the list
-    MethodIs { methods: Vec<String> },
+    MethodIs {
+        #[serde(
+            serialize_with = "serialize_methods",
+            deserialize_with = "deserialize_methods"
+        )]
+        methods: Vec<Method>,
+    },
 
     /// Match if a header contains a specific value (case-insensitive)
     HeaderContains { header: String, value: String },
 
     /// Match if client IP is in any of the CIDR ranges
-    IpInRange { cidrs: Vec<String> },
+    IpInRange { cidrs: Vec<ParsedCidr> },
 
     /// Match if risk score exceeds threshold
     RiskAbove { threshold: f32 },
@@ -46,17 +130,12 @@ impl Condition {
     /// Evaluate this condition against a request context
     pub fn matches(&self, ctx: &RequestContext) -> bool {
         match self {
-            Self::PathPrefix { value } => ctx.uri.starts_with(value),
+            Self::PathPrefix { value } => ctx.path.starts_with(value),
 
-            Self::PathExact { value } => {
-                // Extract path without query string
-                let path = ctx.uri.split('?').next().unwrap_or(&ctx.uri);
-                path == value
-            }
+            Self::PathExact { value } => &ctx.path == value,
 
             Self::MethodIs { methods } => {
-                let method_str = ctx.method.0.as_str();
-                methods.iter().any(|m| m.eq_ignore_ascii_case(method_str))
+                methods.contains(&ctx.method.0)
             }
 
             Self::HeaderContains { header, value } => {
@@ -71,7 +150,7 @@ impl Condition {
             }
 
             Self::IpInRange { cidrs } => {
-                cidrs.iter().any(|cidr| ip_in_cidr(&ctx.client_ip, cidr))
+                cidrs.iter().any(|cidr| cidr.contains(&ctx.client_ip))
             }
 
             Self::RiskAbove { threshold } => ctx.risk_score > *threshold,
@@ -89,88 +168,53 @@ impl Condition {
     }
 }
 
-/// Check if an IP address falls within a CIDR range
-fn ip_in_cidr(ip: &IpAddr, cidr: &str) -> bool {
-    let parts: Vec<&str> = cidr.split('/').collect();
-    if parts.len() != 2 {
-        return false;
+/// Serialize HTTP methods to strings
+fn serialize_methods<S>(methods: &[Method], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    use serde::ser::SerializeSeq;
+    let mut seq = serializer.serialize_seq(Some(methods.len()))?;
+    for method in methods {
+        seq.serialize_element(method.as_str())?;
     }
-
-    let network_str = parts[0];
-    let prefix_len = parts[1].parse::<u8>().ok();
-
-    if prefix_len.is_none() {
-        return false;
-    }
-    let prefix_len = prefix_len.unwrap();
-
-    // Parse network address
-    let network_addr: IpAddr = match network_str.parse() {
-        Ok(addr) => addr,
-        Err(_) => return false,
-    };
-
-    // Must be same IP version
-    match (ip, network_addr) {
-        (IpAddr::V4(ip4), IpAddr::V4(net4)) => {
-            if prefix_len > 32 {
-                return false;
-            }
-            ipv4_in_range(*ip4, net4, prefix_len)
-        }
-        (IpAddr::V6(ip6), IpAddr::V6(net6)) => {
-            if prefix_len > 128 {
-                return false;
-            }
-            ipv6_in_range(*ip6, net6, prefix_len)
-        }
-        _ => false, // Mixed IP versions
-    }
+    seq.end()
 }
 
-fn ipv4_in_range(ip: Ipv4Addr, network: Ipv4Addr, prefix_len: u8) -> bool {
-    if prefix_len == 0 {
-        return true; // 0.0.0.0/0 matches everything
-    }
-
-    let ip_bits = u32::from(ip);
-    let net_bits = u32::from(network);
-    let mask = !0u32 << (32 - prefix_len);
-
-    (ip_bits & mask) == (net_bits & mask)
+/// Deserialize HTTP methods from strings
+fn deserialize_methods<'de, D>(deserializer: D) -> Result<Vec<Method>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let strings: Vec<String> = Vec::deserialize(deserializer)?;
+    strings
+        .into_iter()
+        .map(|s| {
+            s.parse::<Method>()
+                .map_err(|_| serde::de::Error::custom(format!("Invalid HTTP method: {}", s)))
+        })
+        .collect()
 }
 
-fn ipv6_in_range(ip: Ipv6Addr, network: Ipv6Addr, prefix_len: u8) -> bool {
-    if prefix_len == 0 {
-        return true; // ::/0 matches everything
-    }
-
-    let ip_bits = u128::from(ip);
-    let net_bits = u128::from(network);
-    let mask = !0u128 << (128 - prefix_len);
-
-    (ip_bits & mask) == (net_bits & mask)
-}
+// Global regex cache using DashMap for lock-free concurrent access
+static REGEX_CACHE: Lazy<DashMap<String, Option<Arc<Regex>>>> = Lazy::new(DashMap::new);
 
 /// Match a regex pattern against a target field
 fn match_regex(ctx: &RequestContext, target: &str, pattern: &str) -> bool {
-    // Cache compiled regex per pattern
-    thread_local! {
-        static REGEX_CACHE: std::cell::RefCell<std::collections::HashMap<String, Regex>> = 
-            std::cell::RefCell::new(std::collections::HashMap::new());
-    }
+    // Get or compile and cache the regex
+    let re = REGEX_CACHE
+        .entry(pattern.to_string())
+        .or_insert_with(|| {
+            Regex::new(pattern)
+                .ok()
+                .map(Arc::new)
+        })
+        .clone();
 
-    let re = REGEX_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        cache
-            .entry(pattern.to_string())
-            .or_insert_with(|| Regex::new(pattern).ok())
-            .clone()
-    });
-
+    // Return false if regex compilation failed
     let re = match re {
         Some(r) => r,
-        None => return false, // Invalid regex
+        None => return false,
     };
 
     let text = match target {
@@ -194,7 +238,7 @@ mod tests {
     use super::*;
     use bytes::Bytes;
     use http::{HeaderMap, Method, Version};
-    use std::net::{Ipv4Addr, Ipv6Addr};
+    use std::net::{IpAddr, Ipv4Addr};
 
     fn make_ctx(uri: &str, method: Method, ip: IpAddr) -> RequestContext {
         RequestContext::new(
@@ -254,12 +298,12 @@ mod tests {
         );
 
         let cond = Condition::MethodIs {
-            methods: vec!["post".to_string(), "PUT".to_string()],
+            methods: vec![Method::POST, Method::PUT],
         };
         assert!(cond.matches(&ctx));
 
         let cond = Condition::MethodIs {
-            methods: vec!["GET".to_string()],
+            methods: vec![Method::GET],
         };
         assert!(!cond.matches(&ctx));
     }
@@ -296,13 +340,13 @@ mod tests {
         let ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50));
 
         // Should match
-        assert!(ip_in_cidr(&ip, "192.168.1.0/24"));
-        assert!(ip_in_cidr(&ip, "192.168.0.0/16"));
-        assert!(ip_in_cidr(&ip, "0.0.0.0/0"));
+        assert!(ParsedCidr::parse("192.168.1.0/24").unwrap().contains(&ip));
+        assert!(ParsedCidr::parse("192.168.0.0/16").unwrap().contains(&ip));
+        assert!(ParsedCidr::parse("0.0.0.0/0").unwrap().contains(&ip));
 
         // Should not match
-        assert!(!ip_in_cidr(&ip, "10.0.0.0/8"));
-        assert!(!ip_in_cidr(&ip, "192.168.2.0/24"));
+        assert!(!ParsedCidr::parse("10.0.0.0/8").unwrap().contains(&ip));
+        assert!(!ParsedCidr::parse("192.168.2.0/24").unwrap().contains(&ip));
     }
 
     #[test]
@@ -310,13 +354,13 @@ mod tests {
         let ip = IpAddr::V6("2001:db8::1".parse().unwrap());
 
         // Should match
-        assert!(ip_in_cidr(&ip, "2001:db8::/32"));
-        assert!(ip_in_cidr(&ip, "2001::/16"));
-        assert!(ip_in_cidr(&ip, "::/0"));
+        assert!(ParsedCidr::parse("2001:db8::/32").unwrap().contains(&ip));
+        assert!(ParsedCidr::parse("2001::/16").unwrap().contains(&ip));
+        assert!(ParsedCidr::parse("::/0").unwrap().contains(&ip));
 
         // Should not match
-        assert!(!ip_in_cidr(&ip, "2001:db9::/32"));
-        assert!(!ip_in_cidr(&ip, "fe80::/10"));
+        assert!(!ParsedCidr::parse("2001:db9::/32").unwrap().contains(&ip));
+        assert!(!ParsedCidr::parse("fe80::/10").unwrap().contains(&ip));
     }
 
     #[test]
@@ -328,12 +372,15 @@ mod tests {
         );
 
         let cond = Condition::IpInRange {
-            cidrs: vec!["10.0.0.0/8".to_string(), "192.168.0.0/16".to_string()],
+            cidrs: vec![
+                ParsedCidr::parse("10.0.0.0/8").unwrap(),
+                ParsedCidr::parse("192.168.0.0/16").unwrap(),
+            ],
         };
         assert!(cond.matches(&ctx));
 
         let cond = Condition::IpInRange {
-            cidrs: vec!["172.16.0.0/12".to_string()],
+            cidrs: vec![ParsedCidr::parse("172.16.0.0/12").unwrap()],
         };
         assert!(!cond.matches(&ctx));
     }
@@ -361,8 +408,8 @@ mod tests {
             Method::GET,
             IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
         );
-        ctx.threat_tags.push("sqli".to_string());
-        ctx.threat_tags.push("xss".to_string());
+        ctx.threat_tags.insert("sqli".to_string());
+        ctx.threat_tags.insert("xss".to_string());
 
         let cond = Condition::HasTag {
             tag: "sqli".to_string(),
@@ -377,7 +424,7 @@ mod tests {
 
     #[test]
     fn logical_and_condition() {
-        let mut ctx = make_ctx(
+        let ctx = make_ctx(
             "http://example.com/admin",
             Method::POST,
             IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)),
@@ -389,7 +436,7 @@ mod tests {
                     value: "/admin".to_string(),
                 },
                 Condition::MethodIs {
-                    methods: vec!["POST".to_string()],
+                    methods: vec![Method::POST],
                 },
             ],
         };
@@ -401,7 +448,7 @@ mod tests {
                     value: "/admin".to_string(),
                 },
                 Condition::MethodIs {
-                    methods: vec!["GET".to_string()],
+                    methods: vec![Method::GET],
                 },
             ],
         };
@@ -541,7 +588,7 @@ mod tests {
                             value: "/admin".to_string(),
                         },
                         Condition::MethodIs {
-                            methods: vec!["POST".to_string()],
+                            methods: vec![Method::POST],
                         },
                     ],
                 },

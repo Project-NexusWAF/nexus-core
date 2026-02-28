@@ -57,16 +57,19 @@ impl RuleSet {
             nexus_common::NexusError::Config(format!("Failed to read rules file {:?}: {}", path, e))
         })?;
 
-        toml::from_str(&contents).map_err(|e| {
+        let mut ruleset: Self = toml::from_str(&contents).map_err(|e| {
             nexus_common::NexusError::Config(format!("Failed to parse rules TOML: {}", e))
-        })
+        })?;
+        
+        // Sort rules by priority once on load
+        ruleset.rules.sort_by_key(|r| r.priority);
+        
+        Ok(ruleset)
     }
 
-    /// Get only enabled rules, sorted by priority (ascending)
-    pub fn active_rules(&self) -> Vec<&Rule> {
-        let mut rules: Vec<&Rule> = self.rules.iter().filter(|r| r.enabled).collect();
-        rules.sort_by_key(|r| r.priority);
-        rules
+    /// Get only enabled rules in priority order (rules are pre-sorted on load)
+    pub fn active_rules(&self) -> impl Iterator<Item = &Rule> {
+        self.rules.iter().filter(|r| r.enabled)
     }
 }
 
@@ -113,7 +116,7 @@ value = "/admin"
 
     #[test]
     fn active_rules_filters_and_sorts() {
-        let ruleset = RuleSet {
+        let mut ruleset = RuleSet {
             version: "1.0.0".to_string(),
             rules: vec![
                 Rule {
@@ -152,7 +155,10 @@ value = "/admin"
             ],
         };
 
-        let active = ruleset.active_rules();
+        // Sort rules by priority (simulating from_file behavior)
+        ruleset.rules.sort_by_key(|r| r.priority);
+
+        let active: Vec<&Rule> = ruleset.active_rules().collect();
         assert_eq!(active.len(), 2);
         assert_eq!(active[0].id, "R1"); // priority 10
         assert_eq!(active[1].id, "R3"); // priority 30

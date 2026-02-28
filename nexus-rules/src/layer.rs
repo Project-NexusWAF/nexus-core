@@ -39,8 +39,10 @@ mod tests {
     use http::{HeaderMap, Method, Version};
     use std::net::{IpAddr, Ipv4Addr};
 
-    #[tokio::test]
-    async fn layer_evaluates_rules() {
+    #[test]
+    fn layer_evaluates_rules() {
+        use futures::executor::block_on;
+
         let ruleset = RuleSet {
             version: "1.0.0".to_string(),
             rules: vec![Rule {
@@ -68,7 +70,7 @@ mod tests {
             Bytes::new(),
         );
 
-        let decision = layer.analyse(&mut ctx).await.unwrap();
+        let decision = block_on(layer.analyse(&mut ctx)).unwrap();
         assert!(decision.is_blocked());
     }
 
