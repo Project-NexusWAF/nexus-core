@@ -399,6 +399,10 @@ mod tests {
 
         let cond = Condition::RiskAbove { threshold: 0.8 };
         assert!(!cond.matches(&ctx));
+
+        // Boundary test: when risk_score equals threshold, should NOT match (strict >)
+        let cond = Condition::RiskAbove { threshold: 0.75 };
+        assert!(!cond.matches(&ctx));
     }
 
     #[test]
