@@ -3,7 +3,7 @@
 /// Built once at the gateway from an incoming HTTP request, then passed
 /// (by mutable reference) through each layer. Layers annotate it with
 /// findings; the pipeline makes the final decision.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::time::Instant;
 
@@ -42,6 +42,7 @@ pub struct RequestContext {
 
   pub method: MethodWrapper,
   pub uri: String,
+  pub path: String, // URI path without query string
   pub version: VersionWrapper,
   pub headers: HeadersWrapper,
 
@@ -50,7 +51,7 @@ pub struct RequestContext {
   pub path_segments: Vec<String>,
   pub content_type: Option<ContentType>,
 
-  pub threat_tags: Vec<String>,
+  pub threat_tags: HashSet<String>,
   pub risk_score: f32,
 
   pub flagged_by: Option<String>,
@@ -74,6 +75,7 @@ impl RequestContext {
     body: Bytes,
   ) -> RequestContext {
     let uri_str = uri.to_string();
+    let path_str = uri.path().to_string();
     let query_params = parse_query(uri.query().unwrap_or(""));
     let path_segments = parse_path_segments(uri.path());
     let content_type = extract_content_type(&headers);
@@ -86,13 +88,14 @@ impl RequestContext {
       upstream_host: None,
       method: MethodWrapper(method),
       uri: uri_str,
+      path: path_str,
       version: VersionWrapper(version),
       headers: HeadersWrapper(headers),
       body,
       query_params,
       path_segments,
       content_type,
-      threat_tags: Vec::new(),
+      threat_tags: HashSet::new(),
       risk_score: 0.0,
       flagged_by: None,
       rate_limited: false,
@@ -106,9 +109,7 @@ impl RequestContext {
   pub fn tag(&mut self, tag: impl Into<String>, layer: impl Into<String>) {
     let tag = tag.into();
 
-    if !self.threat_tags.contains(&tag) {
-      self.threat_tags.push(tag);
-    }
+    self.threat_tags.insert(tag);
     if self.flagged_by.is_none() {
       self.flagged_by = Some(layer.into());
     }
