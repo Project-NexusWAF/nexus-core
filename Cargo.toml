@@ -2,6 +2,8 @@
 members = [
   "nexus-common", 
   "nexus-config",
+  "nexus-lex", 
+  "nexus-rate",
   "nexus-rules"
 ]
 
@@ -70,7 +72,7 @@ rand         = "0.8"
 nexus-common  = { path = "nexus-common" }
 nexus-config  = { path = "nexus-config" }
 nexus-rate    = { path = "nexus-rate" }
-nexus-lexical = { path = "nexus-lexical" }
+nexus-lexical = { path = "nexus-lex" }
 nexus-grammar = { path = "nexus-grammar" }
 nexus-rules   = { path = "nexus-rules" }
 nexus-lb      = { path = "nexus-lb" }

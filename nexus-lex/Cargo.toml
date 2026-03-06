@@ -1,0 +1,21 @@
+[package]
+name        = "nexus-lex"
+description = "Precompiled regex-based threat detection layer for NexusWAF"
+version.workspace   = true
+edition.workspace   = true
+authors.workspace   = true
+license.workspace   = true
+
+[dependencies]
+nexus-common = { workspace = true }
+nexus-config = { workspace = true }
+
+regex        = { workspace = true }
+once_cell    = { workspace = true }
+async-trait  = { workspace = true }
+tracing      = { workspace = true }
+serde        = { workspace = true }
+thiserror    = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

@@ -422,6 +422,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexus-lex"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "nexus-common",
+ "nexus-config",
+ "once_cell",
+ "regex",
+ "serde",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "nexus-rate"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "dashmap",
+ "nexus-common",
+ "nexus-config",
+ "parking_lot",
+ "serde",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "nexus-rules"
 version = "0.1.0"
 dependencies = [
