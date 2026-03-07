@@ -88,7 +88,7 @@ impl InnerLayer for RateLayer {
           .meta
           .insert("rate_retry_after".into(), retry_after_secs.to_string());
         Ok(Decision::RateLimit {
-          retry_after_seconds: retry_after_secs as u32,
+          retry_after_seconds: retry_after_secs.min(u32::MAX as u64) as u32,
         })
       }
 
