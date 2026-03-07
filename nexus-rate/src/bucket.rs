@@ -87,7 +87,7 @@ impl TokenBucket {
   pub fn is_idle(&self, ttl: Duration) -> bool {
     self.last_refill.elapsed() > ttl
   }
-  pub fn avaliable_tokens(&self) -> u32 {
+  pub fn available_tokens(&self) -> u32 {
     self.tokens as u32
   }
 }
