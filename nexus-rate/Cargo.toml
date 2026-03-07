@@ -1,6 +1,6 @@
 [package]
 name = "nexus-rate"
-description = "Token-bucket rate limiter with per-IP sliding window for NexusWAF"
+description = "Token-bucket rate limiter with per-IP token buckets for NexusWAF"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

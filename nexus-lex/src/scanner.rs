@@ -39,6 +39,25 @@ pub enum ThreatCategory {
 }
 
 impl ThreatCategory {
+  /// Numeric severity rank — higher is more dangerous.
+  /// Used by the layer to pick the worst match across all findings.
+  ///
+  /// Ranking rationale:
+  ///   CommandInjection (4) — direct OS code execution, highest impact
+  ///   SqlInjection     (3) — data exfiltration / destruction
+  ///   CrossSiteScripting (2) — client-side code execution
+  ///   PathTraversal    (1) — file-system read, limited to server files
+  ///   Evasion          (0) — encoding trick, no direct payload impact
+  pub fn severity(&self) -> u8 {
+    match self {
+      ThreatCategory::CommandInjection => 4,
+      ThreatCategory::SqlInjection => 3,
+      ThreatCategory::CrossSiteScripting => 2,
+      ThreatCategory::PathTraversal => 1,
+      ThreatCategory::Evasion => 0,
+    }
+  }
+
   pub fn as_tag(&self) -> &'static str {
     match self {
       ThreatCategory::SqlInjection => "sqli",
@@ -190,6 +209,7 @@ impl LexicalScanner {
 
     // Something matched — find which named pattern(s) fired.
     // This second pass only happens on suspicious traffic.
+    let mut found_named_match = false;
     for (pattern_name, regex) in named.iter() {
       if regex.is_match(text) {
         matches.push(ThreatMatch {
@@ -199,8 +219,23 @@ impl LexicalScanner {
         });
         // One match per category per location is sufficient for
         // reporting purposes — we don't need every matching pattern.
+        found_named_match = true;
         break;
       }
+    }
+
+    // The RegexSet fired but no named pattern claimed the match.
+    // This happens when the SET contains patterns that have no named
+    // counterpart (e.g. file I/O, system-table probing for SQLi, or
+    // iframe/SVG vectors for XSS). We must not silently drop the hit,
+    // so we push a sentinel ThreatMatch that preserves the category
+    // and location so downstream layers can still act on it.
+    if !found_named_match {
+      matches.push(ThreatMatch {
+        category,
+        pattern: "unknown_pattern",
+        matched_in: location.clone(),
+      });
     }
   }
 }

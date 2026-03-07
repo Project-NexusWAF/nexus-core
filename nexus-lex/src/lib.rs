@@ -1,4 +1,4 @@
-//! nexus-lexical — Regex-based lexical threat detection for NexusWAF
+//! nexus-lex — Regex-based lexical threat detection for NexusWAF
 //!
 //! ## Design
 //!

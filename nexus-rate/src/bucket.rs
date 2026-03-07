@@ -15,6 +15,14 @@ pub struct TokenBucket {
 
 impl TokenBucket {
   pub fn new(capacity: u32, requests_per_second: u32) -> Self {
+    assert!(
+      capacity > 0,
+      "TokenBucket::new: capacity must be > 0, got 0"
+    );
+    assert!(
+      requests_per_second > 0,
+      "TokenBucket::new: requests_per_second must be > 0, got 0 (would make refill_rate_per_ns zero, causing division by zero in try_consume)"
+    );
     Self {
       tokens: capacity as f64,
       capacity: capacity as f64,
@@ -45,6 +53,37 @@ impl TokenBucket {
       self.last_refill = now;
     }
   }
+  /// Update the bucket's capacity and refill rate in-place, preserving
+  /// accumulated tokens where possible.
+  ///
+  /// Called after a policy hot-update so that existing buckets immediately
+  /// adopt the new limits rather than keeping their old parameters until
+  /// they are evicted and recreated.
+  ///
+  /// Token preservation rules:
+  /// - If the new capacity is larger, the current token count is kept as-is
+  ///   (the client keeps what they earned, and the ceiling rises).
+  /// - If the new capacity is smaller, the current token count is clamped
+  ///   down to the new capacity (we cannot hold more than the new ceiling).
+  pub fn reconfigure(&mut self, capacity: u32, requests_per_second: u32) {
+    assert!(
+      capacity > 0,
+      "TokenBucket::reconfigure: capacity must be > 0, got 0"
+    );
+    assert!(
+      requests_per_second > 0,
+      "TokenBucket::reconfigure: requests_per_second must be > 0, got 0 (would make refill_rate_per_ns zero, causing division by zero in try_consume)"
+    );
+    let new_capacity = capacity as f64;
+    self.capacity = new_capacity;
+    self.refill_rate_per_ns = requests_per_second as f64 / 1_000_000_000.0;
+    // Clamp existing tokens down to the new ceiling; never inflate them
+    // upward (that would grant tokens the client hasn't earned).
+    if self.tokens > new_capacity {
+      self.tokens = new_capacity;
+    }
+  }
+
   pub fn is_idle(&self, ttl: Duration) -> bool {
     self.last_refill.elapsed() > ttl
   }

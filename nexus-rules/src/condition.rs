@@ -179,6 +179,12 @@ where
 }
 
 /// Deserialize HTTP methods from strings
+///
+/// Input strings are normalized to uppercase before parsing so that
+/// config values like "get" or "Post" produce the canonical `Method::GET`
+/// / `Method::POST` variants rather than extension Methods whose `as_str()`
+/// returns the original lowercase string and therefore never compares equal
+/// to the uppercase value stored in `ctx.method.0`.
 fn deserialize_methods<'de, D>(deserializer: D) -> Result<Vec<Method>, D::Error>
 where
   D: Deserializer<'de>,
@@ -187,7 +193,9 @@ where
   strings
     .into_iter()
     .map(|s| {
-      s.parse::<Method>()
+      let upper = s.to_ascii_uppercase();
+      upper
+        .parse::<Method>()
         .map_err(|_| serde::de::Error::custom(format!("Invalid HTTP method: {}", s)))
     })
     .collect()
@@ -296,6 +304,63 @@ mod tests {
       methods: vec![Method::GET],
     };
     assert!(!cond.matches(&ctx));
+  }
+
+  #[test]
+  fn method_is_deserializes_lowercase_and_matches() {
+    // Simulate a rule config that spells methods in lowercase / mixed-case,
+    // which is common in TOML/YAML authored by humans.
+    // deserialize_methods must normalize to uppercase so the parsed Method
+    // equals Method::GET / Method::POST and not an extension Method whose
+    // as_str() returns "get" / "post" (which would never match ctx.method.0).
+    let json = r#"{"type":"method_is","methods":["get","post"]}"#;
+    let cond: Condition = serde_json::from_str(json).expect("deserialization must succeed");
+
+    // Verify it matches a GET request.
+    let ctx_get = make_ctx(
+      "http://example.com/",
+      Method::GET,
+      IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+    );
+    assert!(
+      cond.matches(&ctx_get),
+      "lowercase 'get' in config should match a GET request"
+    );
+
+    // Verify it matches a POST request.
+    let ctx_post = make_ctx(
+      "http://example.com/",
+      Method::POST,
+      IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+    );
+    assert!(
+      cond.matches(&ctx_post),
+      "lowercase 'post' in config should match a POST request"
+    );
+
+    // Verify it does NOT match a DELETE request.
+    let ctx_delete = make_ctx(
+      "http://example.com/",
+      Method::DELETE,
+      IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+    );
+    assert!(
+      !cond.matches(&ctx_delete),
+      "lowercase 'get'/'post' config should not match a DELETE request"
+    );
+
+    // Round-trip: serializing and re-deserializing must produce uppercase strings.
+    let serialized = serde_json::to_string(&cond).expect("serialization must succeed");
+    assert!(
+      serialized.contains("\"GET\""),
+      "serialized methods must be uppercase GET, got: {}",
+      serialized
+    );
+    assert!(
+      serialized.contains("\"POST\""),
+      "serialized methods must be uppercase POST, got: {}",
+      serialized
+    );
   }
 
   #[test]

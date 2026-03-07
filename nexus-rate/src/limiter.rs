@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use dashmap::DashMap;
 use parking_lot::RwLock;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::bucket::TokenBucket;
 use crate::policy::{PreCheckResult, RatePolicy};
@@ -64,6 +64,13 @@ impl RateLimiter {
       .entry(ip)
       .or_insert_with(|| TokenBucket::new(burst, rps));
 
+    // Ensure existing buckets immediately reflect the current policy.
+    // or_insert_with only runs the closure for *new* entries, so a bucket
+    // created under an old policy would otherwise keep its old capacity and
+    // refill rate indefinitely. reconfigure() updates both fields in-place
+    // and clamps the current token count to the new capacity if it shrank.
+    bucket.reconfigure(burst, rps);
+
     match bucket.try_consume() {
       Ok(remaining) => {
         debug!(ip = %ip, remaining, "Rate check: allowed");
@@ -105,6 +112,17 @@ impl RateLimiter {
   }
 
   pub async fn start_cleanup(self: Arc<Self>, interval: Duration, ttl: Duration) {
+    let interval = if interval.is_zero() {
+      let safe = Duration::from_secs(1);
+      warn!(
+        "start_cleanup called with a zero interval, which would panic in \
+         tokio::time::interval; clamping to {:?}",
+        safe
+      );
+      safe
+    } else {
+      interval
+    };
     let mut ticker = tokio::time::interval(interval);
     loop {
       ticker.tick().await;

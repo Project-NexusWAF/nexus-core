@@ -50,7 +50,7 @@ impl InnerLayer for LexicalLayer {
     // We inspect URI, body, User-Agent, Referer.
     // Each text is paired with its source for accurate match reporting.
     let uri_str = ctx.uri.clone();
-    let body_str = std::str::from_utf8(&ctx.body).unwrap_or("").to_string();
+    let body_str = String::from_utf8_lossy(&ctx.body).to_string();
     let ua = ctx
       .headers
       .0
@@ -104,7 +104,11 @@ impl InnerLayer for LexicalLayer {
       ctx.tag(tag, self.name());
       ctx.add_risk(self.config.risk_delta);
 
-      if worst_category.is_none() {
+      let severity = threat_match.category.severity();
+      if worst_category
+        .as_ref()
+        .map_or(true, |w| severity > w.severity())
+      {
         worst_category = Some(threat_match.category.clone());
         worst_pattern = threat_match.pattern;
       }
