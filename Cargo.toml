@@ -2,7 +2,8 @@
 members = [
   "nexus-common", 
   "nexus-config",
-  "nexus-rules"
+  "nexus-rules",
+  "nexus-lb"
 ]
 
 resolver = "2"
