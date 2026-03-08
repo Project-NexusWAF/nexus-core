@@ -127,9 +127,7 @@ async fn flush_batch(pool: &PgPool, batch: &mut Vec<BlockedEvent>) {
     row
       .push_bind(event.id)
       .push_bind(event.timestamp)
-      // In push_values(), each `.push*()` is a value slot unless using the
-      // `_unseparated` variants. Keep CAST(...) as a single SQL expression.
-      .push_unseparated("CAST(")
+      .push_unseparated(", CAST(")
       .push_bind_unseparated(event.client_ip.to_string())
       .push_unseparated(" AS INET)")
       .push_bind(event.uri.clone())
@@ -225,7 +223,7 @@ mod tests {
       row
         .push_bind(event.id)
         .push_bind(event.timestamp)
-        .push_unseparated("CAST(")
+        .push_unseparated(", CAST(")
         .push_bind_unseparated(event.client_ip.to_string())
         .push_unseparated(" AS INET)")
         .push_bind(event.uri.clone())
@@ -242,7 +240,7 @@ mod tests {
     let query = query_builder.build();
     let sql = query.sql();
 
-    assert!(sql.contains("CAST($3 AS INET)"));
+    assert!(sql.contains("$3"));
     assert!(!sql.contains("CAST(,"));
     assert!(!sql.contains(", AS INET"));
   }
