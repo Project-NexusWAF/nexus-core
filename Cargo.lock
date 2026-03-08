@@ -1661,6 +1661,9 @@ dependencies = [
 ]
 
 [[package]]
+<<<<<<< HEAD
+name = "nexus-lb"
+=======
 name = "nexus-control"
 version = "0.1.0"
 dependencies = [
@@ -1790,15 +1793,21 @@ dependencies = [
 
 [[package]]
 name = "nexus-rate"
+>>>>>>> origin/master
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "dashmap",
  "nexus-common",
  "nexus-config",
+<<<<<<< HEAD
+ "parking_lot",
+ "serde",
+=======
  "parking_lot 0.12.5",
  "serde",
  "thiserror 1.0.69",
+>>>>>>> origin/master
  "tokio",
  "tracing",
 ]
