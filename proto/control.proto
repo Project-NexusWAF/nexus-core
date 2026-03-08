@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package nexus.control;
+
+service ControlPlane {
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+  rpc GetStats(GetStatsRequest) returns (StatsResponse);
+  rpc GetRules(GetRulesRequest) returns (GetRulesResponse);
+  rpc UpdateRules(UpdateRulesRequest) returns (UpdateRulesResponse);
+  rpc ListRuleVersions(ListRuleVersionsRequest) returns (ListRuleVersionsResponse);
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  bool ok = 1;
+  string status = 2;
+  uint64 config_version = 3;
+}
+
+message GetStatsRequest {}
+
+message StatsResponse {
+  uint64 requests_total = 1;
+  uint64 blocked_total = 2;
+  uint64 rate_limited_total = 3;
+  repeated string pipeline_layers = 4;
+  uint64 config_version = 5;
+  string ml_circuit_state = 6;
+  uint64 healthy_upstreams = 7;
+}
+
+message GetRulesRequest {}
+
+message GetRulesResponse {
+  bool found = 1;
+  string version = 2;
+  string content = 3;
+  string source = 4;
+}
+
+message UpdateRulesRequest {
+  string version = 1;
+  string content = 2;
+}
+
+message UpdateRulesResponse {
+  bool updated = 1;
+  uint64 config_version = 2;
+  string message = 3;
+}
+
+message ListRuleVersionsRequest {}
+
+message RuleVersion {
+  int32 id = 1;
+  string version = 2;
+  string created_at = 3;
+  bool active = 4;
+}
+
+message ListRuleVersionsResponse {
+  repeated RuleVersion versions = 1;
+}

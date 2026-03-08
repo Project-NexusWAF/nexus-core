@@ -1,0 +1,22 @@
+[package]
+name = "nexus-pipeline"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+nexus-common = { workspace = true }
+nexus-config = { workspace = true }
+nexus-rate = { workspace = true }
+nexus-lex = { workspace = true }
+nexus-grammar = { workspace = true }
+nexus-rules = { workspace = true }
+nexus-ml-client = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+bytes = { workspace = true }
+http = { workspace = true }

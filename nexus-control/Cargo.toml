@@ -1,0 +1,40 @@
+[package]
+name = "nexus-control"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+name = "nexus_control"
+
+[dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+mime_guess = "2"
+nexus-common = { workspace = true }
+nexus-config = { workspace = true }
+nexus-pipeline = { workspace = true }
+nexus-rules = { workspace = true }
+nexus-store = { workspace = true }
+parking_lot = { workspace = true }
+prost = { workspace = true }
+rust-embed = { version = "8", features = ["axum"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+subtle = "2"
+tokio = { workspace = true }
+toml = { workspace = true }
+tonic = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[build-dependencies]
+tonic-build = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+tower = { workspace = true }
