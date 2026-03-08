@@ -1,0 +1,93 @@
+use std::net::SocketAddr;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+
+use anyhow::Context;
+use axum::{
+  routing::{any, get},
+  Router,
+};
+use nexus_control::proto::control_plane_server::ControlPlaneServer;
+use nexus_control::server::ControlServer;
+use nexus_pipeline::PipelineBuilder;
+use tracing_subscriber::EnvFilter;
+
+use crate::proxy;
+use crate::state::AppState;
+
+pub fn init_tracing() {
+  let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+    EnvFilter::new("info,tower_http=info,nexus_gateway=debug,nexus_control=debug")
+  });
+  let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
+}
+
+pub fn spawn_config_reload_task(state: Arc<AppState>) {
+  tokio::spawn(async move {
+    let mut rx = state.control.live_config.clone();
+    loop {
+      if rx.changed().await.is_err() {
+        tracing::warn!("config watcher channel closed; stopping reload task");
+        return;
+      }
+
+      let cfg = rx.borrow().clone();
+      let pipeline = PipelineBuilder::from_config(&cfg);
+      match pipeline.init().await {
+        Ok(()) => {
+          *state.control.pipeline.write() = pipeline;
+          let version = state.control.config_version.fetch_add(1, Ordering::SeqCst) + 1;
+          tracing::info!(config_version = version, "live config applied to pipeline");
+        }
+        Err(error) => {
+          tracing::error!(error = %error, "failed to apply live config update; keeping current pipeline");
+        }
+      }
+    }
+  });
+}
+
+pub async fn run_gateway(addr: String, state: Arc<AppState>) -> anyhow::Result<()> {
+  let listener = tokio::net::TcpListener::bind(&addr)
+    .await
+    .with_context(|| format!("failed to bind gateway listener on {addr}"))?;
+  tracing::info!(addr = %addr, "HTTP proxy listening");
+
+  let router = Router::new()
+    .route("/demo", get(proxy::demo_page))
+    .route("/demo/check", get(proxy::demo_check_handler))
+    .fallback(any(proxy::proxy_handler))
+    .with_state(state);
+  axum::serve(
+    listener,
+    router.into_make_service_with_connect_info::<SocketAddr>(),
+  )
+  .await
+  .context("gateway server failed")
+}
+
+pub async fn run_grpc(addr: String, state: Arc<AppState>) -> anyhow::Result<()> {
+  let socket_addr: SocketAddr = addr
+    .parse()
+    .with_context(|| format!("invalid gRPC addr: {addr}"))?;
+  tracing::info!(addr = %addr, "gRPC control plane listening");
+
+  tonic::transport::Server::builder()
+    .add_service(ControlPlaneServer::new(ControlServer::new(Arc::clone(
+      &state.control,
+    ))))
+    .serve(socket_addr)
+    .await
+    .context("gRPC control plane failed")
+}
+
+pub async fn run_rest(addr: String, state: Arc<AppState>) -> anyhow::Result<()> {
+  let listener = tokio::net::TcpListener::bind(&addr)
+    .await
+    .with_context(|| format!("failed to bind REST listener on {addr}"))?;
+  tracing::info!(addr = %addr, "REST API and dashboard listening");
+  let router = nexus_control::http::rest_router(Arc::clone(&state.control));
+  axum::serve(listener, router)
+    .await
+    .context("REST server failed")
+}

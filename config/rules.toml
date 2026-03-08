@@ -1,0 +1,94 @@
+version = "1.0.1-demo"
+
+[[rules]]
+id = "R001"
+name = "Allow health endpoint"
+enabled = true
+priority = 5
+action = "allow"
+description = "Keep health checks predictable and low-noise."
+[rules.condition]
+type = "path_exact"
+value = "/api/health"
+
+[[rules]]
+id = "R002"
+name = "Block admin paths"
+enabled = true
+priority = 10
+action = "block"
+description = "Do not expose admin-like routes on the public edge."
+[rules.condition]
+type = "path_prefix"
+value = "/admin"
+
+[[rules]]
+id = "R003"
+name = "Block cloud metadata probing"
+enabled = true
+priority = 20
+action = "block"
+description = "Protect against SSRF-style probing to metadata endpoints."
+[rules.condition]
+type = "regex_match"
+target = "uri"
+pattern = '(?i)latest/meta-data|metadata\.google\.internal'
+
+[[rules]]
+id = "R004"
+name = "Block traversal and sensitive file probes"
+enabled = true
+priority = 30
+action = "block"
+description = "Stop common traversal probes and sensitive local file access attempts."
+[rules.condition]
+type = "regex_match"
+target = "uri"
+pattern = '(?i)(\.\./|%2e%2e%2f|/etc/passwd|win\.ini)'
+
+[[rules]]
+id = "R005"
+name = "Log suspicious automation user-agents"
+enabled = true
+priority = 40
+action = "log"
+description = "Track known scanner-style user-agents without hard blocking."
+[rules.condition]
+type = "header_contains"
+header = "user-agent"
+value = "sqlmap"
+
+[[rules]]
+id = "R006"
+name = "Block SQLi keyword patterns in URI"
+enabled = true
+priority = 45
+action = "block"
+description = "Catch common custom SQLi probes even with compact or encoded spacing."
+[rules.condition]
+type = "regex_match"
+target = "uri"
+pattern = '(?i)or(?:\s|\+|%20)*1(?:\s|\+|%20)*=(?:\s|\+|%20)*1|union(?:\s|\+|%20)*select'
+
+[[rules]]
+id = "R007"
+name = "Block SQLi keyword patterns in body"
+enabled = true
+priority = 46
+action = "block"
+description = "Catch SQLi probes sent in request body for demo and real attacks."
+[rules.condition]
+type = "regex_match"
+target = "body"
+pattern = '(?i)or(?:\s|\+|%20)*1(?:\s|\+|%20)*=(?:\s|\+|%20)*1|union(?:\s|\+|%20)*select'
+
+[[rules]]
+id = "R008"
+name = "Block high-risk cumulative requests"
+enabled = true
+priority = 60
+action = "block"
+description = "If earlier layers raise risk significantly, force a block."
+[rules.condition]
+type = "risk_above"
+threshold = 0.85
