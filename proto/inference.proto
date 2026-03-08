@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package nexus.inference;
+
+service InferenceService {
+  rpc Classify(InferenceRequest) returns (InferenceResponse);
+}
+
+message InferenceRequest {
+  string text = 1;
+  string request_id = 2;
+}
+
+message InferenceResponse {
+  float score = 1;
+  string label = 2;
+  string request_id = 3;
+}

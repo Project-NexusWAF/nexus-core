@@ -5,6 +5,6 @@ pub mod watcher;
 pub use loader::ConfigLoader;
 pub use schema::{
   Config, GatewayConfig, LbConfig, LexicalConfig, MlConfig, PipelineConfig, RateConfig,
-  RulesConfig, UpstreamConfig,
+  RulesConfig, StoreConfig, UpstreamConfig,
 };
-pub use watcher::ConfigWatcher;
+pub use watcher::{ConfigWatcher, LiveConfig};

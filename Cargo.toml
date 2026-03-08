@@ -1,10 +1,16 @@
 [workspace]
 members = [
-  "nexus-common", 
+  "nexus-common",
   "nexus-config",
-  "nexus-lex", 
+  "nexus-lex",
+  "nexus-grammar",
   "nexus-rate",
-  "nexus-rules"
+  "nexus-rules",
+  "nexus-ml-client",
+  "nexus-store",
+  "nexus-pipeline",
+  "nexus-control",
+  "nexus-gateway"
 ]
 
 resolver = "2"
@@ -67,6 +73,7 @@ bytes        = "1"
 futures      = "0.3"
 async-trait  = "0.1"
 rand         = "0.8"
+sqlx         = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "macros"] }
 
 # Internal crates
 nexus-common  = { path = "nexus-common" }
@@ -75,8 +82,8 @@ nexus-rate    = { path = "nexus-rate" }
 nexus-lex = { path = "nexus-lex" }
 nexus-grammar = { path = "nexus-grammar" }
 nexus-rules   = { path = "nexus-rules" }
+nexus-store   = { path = "nexus-store" }
 nexus-lb      = { path = "nexus-lb" }
-nexus-metrics = { path = "nexus-metrics" }
 nexus-ml-client = { path = "nexus-ml-client" }
 nexus-control = { path = "nexus-control" }
 nexus-pipeline = { path = "nexus-pipeline" }

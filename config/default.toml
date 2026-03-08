@@ -1,0 +1,59 @@
+[gateway]
+listen_addr = "0.0.0.0:8080"
+control_addr = "0.0.0.0:9090"
+rest_addr = "0.0.0.0:9091"
+metrics_addr = "0.0.0.0:9092"
+max_body_bytes = 1048576
+request_timeout_ms = 30000
+worker_threads = 0
+trust_x_forwarded_for = true
+# pid_file = "/tmp/nexus-gateway.pid"  # optional: defaults to OS temp dir
+auth_token = "70e9afc94640ba77445fa6643b2af8f6da6ed2b38fd12681ac0d3a2ab37d490a"             # optional: or set NEXUS_ADMIN_TOKEN env
+
+[pipeline]
+risk_threshold = 0.7
+ml_enabled = true
+short_circuit = true
+
+[rate]
+enabled = true
+requests_per_second = 1000
+burst_capacity = 200
+window_secs = 1
+cleanup_interval_secs = 300
+
+[lexical]
+sqli_enabled = true
+xss_enabled = true
+path_traversal_enabled = true
+cmd_injection_enabled = true
+risk_delta = 0.4
+block_on_match = false
+
+[lb]
+algorithm = "round_robin"
+health_check_interval_secs = 10
+unhealthy_threshold = 3
+healthy_threshold = 2
+upstreams = [
+  { name = "backend-1", addr = "127.0.0.1:3000", weight = 1, enabled = true }
+]
+
+[rules]
+rules_file = "config/rules.toml"
+fail_closed = true
+
+[ml]
+endpoint = "http://127.0.0.1:50051"
+timeout_ms = 10000
+risk_delta = 0.6
+confidence_threshold = 0.8
+
+[store]
+postgres_url = "postgres://postgres:postgres@localhost:5432/nexus_waf"
+influx_url = "http://localhost:8086"
+influx_token = ""
+influx_org = "nexus"
+influx_bucket = "waf_metrics"
+log_batch_size = 100
+log_flush_ms = 500
