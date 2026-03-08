@@ -1,0 +1,20 @@
+[package]
+name = "nexus-rate"
+description = "Token-bucket rate limiter with per-IP token buckets for NexusWAF"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+nexus-common = { workspace = true }
+nexus-config = { workspace = true }
+
+dashmap      = { workspace = true }
+parking_lot  = { workspace = true }
+tokio        = { workspace = true }
+tracing      = { workspace = true }
+serde        = { workspace = true }
+thiserror    = { workspace = true }
+async-trait  = { workspace = true }
