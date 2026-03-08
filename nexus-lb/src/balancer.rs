@@ -55,9 +55,15 @@ impl LoadBalancer {
                     .iter()
                     .flat_map(|u| std::iter::repeat_n(u.addr.as_str(), u.weight as usize))
                     .collect();
-                let idx = self.counter.fetch_add(1, Ordering::Relaxed) % pool.len();
-                pool[idx].to_string()
-            }
+                if pool.is_empty() {
+                // Fallback: all weights are zero, use plain round-robin
+                    let idx = self.counter.fetch_add(1, Ordering::Relaxed) % routable.len();
+                    routable[idx].addr.clone()
+                } else {
+                    let idx = self.counter.fetch_add(1, Ordering::Relaxed) % pool.len();
+                    pool[idx].to_string()
+    }
+}
             LbAlgorithm::LeastConnections => {
                 // TODO: track active connections
                 let idx = self.counter.fetch_add(1, Ordering::Relaxed) % routable.len();
@@ -74,11 +80,11 @@ impl LoadBalancer {
             u.consecutive_failures = 0;
             u.consecutive_successes += 1;
             if u.consecutive_successes >= self.healthy_threshold
-                && u.status == UpstreamStatus::Unhealthy
-            {
-                u.status = UpstreamStatus::Healthy;
-                tracing::info!(addr = addr, "Upstream recovered -- marked Healthy");
-            }
+            && u.status != UpstreamStatus::Healthy
+        {
+            u.status = UpstreamStatus::Healthy;
+            tracing::info!(addr = addr, "Upstream marked Healthy");
+        }
         }
     }
 

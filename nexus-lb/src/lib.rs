@@ -66,6 +66,20 @@ mod tests {
     }
 
     #[test]
+    fn weighted_round_robin_falls_back_when_all_weights_zero() {
+        let lb = make_lb(
+            vec![
+                upstream("a:80", 0, UpstreamStatus::Healthy),
+                upstream("b:80", 0, UpstreamStatus::Healthy),
+            ],
+            LbAlgorithm::WeightedRoundRobin,
+        );
+        // Should not panic, should return one of the upstreams
+        let result = lb.select();
+        assert!(result.is_ok());
+    }
+
+    #[test]
     fn unhealthy_upstream_is_excluded_from_selection() {
         let lb = make_lb(
             vec![
@@ -103,6 +117,18 @@ mod tests {
         }
         lb.record_success("a:80");
         assert_eq!(lb.statuses()[0].1, UpstreamStatus::Unhealthy);
+        lb.record_success("a:80");
+        assert_eq!(lb.statuses()[0].1, UpstreamStatus::Healthy);
+    }
+
+    #[test]
+    fn unknown_upstream_transitions_to_healthy_after_successes() {
+        let lb = make_lb(
+            vec![upstream("a:80", 1, UpstreamStatus::Unknown)],
+            LbAlgorithm::RoundRobin,
+        );
+        lb.record_success("a:80");
+        assert_eq!(lb.statuses()[0].1, UpstreamStatus::Unknown);
         lb.record_success("a:80");
         assert_eq!(lb.statuses()[0].1, UpstreamStatus::Healthy);
     }

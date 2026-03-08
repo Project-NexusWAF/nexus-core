@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 nexus-common = { path = "../nexus-common" }
 nexus-config  = { path = "../nexus-config" }
-dashmap       = "6"
+dashmap = { workspace = true }
 parking_lot   = "0.12"
 tokio         = { version = "1", features = ["full"] }
 tracing       = "0.1"

@@ -1,6 +1,8 @@
 use std::{sync::Arc, time::Duration};
-use tokio::{net::TcpStream, time};
+use tokio::{net::TcpStream, time::{self, timeout}};
 use crate::balancer::LoadBalancer;
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub async fn run_health_checks(lb: Arc<LoadBalancer>, interval: Duration) {
     let mut ticker = time::interval(interval);
@@ -17,9 +19,9 @@ pub async fn run_health_checks(lb: Arc<LoadBalancer>, interval: Duration) {
         for addr in addrs {
             let lb = Arc::clone(&lb);
             tokio::spawn(async move {
-                match TcpStream::connect(&addr).await {
-                    Ok(_)  => lb.record_success(&addr),
-                    Err(_) => lb.record_failure(&addr),
+                match timeout(CONNECT_TIMEOUT, TcpStream::connect(&addr)).await {
+                    Ok(Ok(_))  => lb.record_success(&addr),
+                    Ok(Err(_)) | Err(_) => lb.record_failure(&addr),
                 }
             });
         }

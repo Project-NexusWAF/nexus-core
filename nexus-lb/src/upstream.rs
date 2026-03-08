@@ -8,7 +8,7 @@ pub enum UpstreamStatus {
     Unknown,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Upstream {
     pub name: String,
     pub addr: String,
