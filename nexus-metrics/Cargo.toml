@@ -1,0 +1,10 @@
+[package]
+name = "nexus-metrics"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+nexus-common = { path = "../nexus-common" }
+prometheus = { workspace = true }
+once_cell = { workspace = true }
+tracing = { workspace = true }

@@ -12,6 +12,7 @@ members = [
   "nexus-control",
   "nexus-gateway",
   "nexus-lb",
+  "nexus-metrics",
 ]
 resolver = "2"
 
@@ -78,6 +79,7 @@ nexus-lb      = { path = "nexus-lb" }
 nexus-ml-client = { path = "nexus-ml-client" }
 nexus-control = { path = "nexus-control" }
 nexus-pipeline = { path = "nexus-pipeline" }
+nexus-metrics = { path = "nexus-metrics" }
 
 [profile.release]
 opt-level     = 3
