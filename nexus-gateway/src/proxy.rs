@@ -1,15 +1,17 @@
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::body::{to_bytes, Body};
 use axum::extract::{ConnectInfo, Query, State};
 use axum::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use axum::http::{Method, Request, Response, StatusCode, Uri, Version};
 use bytes::Bytes;
-use http_body_util::Full;
+use http_body_util::{BodyExt, Full};
 use nexus_common::{Decision, RequestContext};
+use nexus_config::schema::LbAlgorithm;
+use nexus_metrics::MetricsRegistry;
 use serde::Deserialize;
 
 use crate::state::AppState;
@@ -83,7 +85,7 @@ pub async fn demo_check_handler(
   let mut context = RequestContext::new(
     remote_addr.ip(),
     payload.method.clone(),
-    uri,
+    uri.clone(),
     Version::HTTP_11,
     headers,
     Bytes::from(payload.body.clone()),
@@ -115,12 +117,123 @@ pub async fn demo_check_handler(
 
   let blocked_by = result.decided_by.unwrap_or("none");
   let decision_text = decision_label(&result.decision);
+  let mut upstream_payload: Option<serde_json::Value> = None;
+  let mut upstream_error: Option<String> = None;
+  let cfg = state.active_config();
+  let request_timeout = Duration::from_millis(cfg.gateway.request_timeout_ms);
+  let lb_algorithm = cfg.lb.algorithm.clone();
+
+  if !result.is_blocked() {
+    match state.select_upstream() {
+      Ok(upstream) => {
+        MetricsRegistry::record_lb_selection(&upstream.addr, lb_algorithm_label(&lb_algorithm));
+        let upstream_uri = match build_upstream_uri(&upstream.addr, &uri) {
+          Ok(uri) => Some(uri),
+          Err(error) => {
+            upstream_error = Some(format!("invalid upstream URI: {error}"));
+            None
+          }
+        };
+
+        if let Some(upstream_uri) = upstream_uri {
+          let outbound = match Request::builder()
+            .method(payload.method.clone())
+            .version(Version::HTTP_11)
+            .uri(upstream_uri)
+            .body(Full::new(Bytes::from(payload.body.clone())))
+          {
+            Ok(req) => Some(req),
+            Err(error) => {
+              upstream_error = Some(format!("failed to build upstream request: {error}"));
+              None
+            }
+          };
+
+          if let Some(mut outbound) = outbound {
+            if !payload.body.is_empty() {
+              outbound.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; charset=utf-8"),
+              );
+            }
+            let upstream_start = Instant::now();
+            match tokio::time::timeout(request_timeout, state.http_client.request(outbound)).await {
+              Ok(Ok(upstream_response)) => {
+                upstream.record_success();
+                let latency_ms = upstream_start.elapsed().as_secs_f64() * 1_000.0;
+                MetricsRegistry::record_upstream(&upstream.addr, "success", latency_ms);
+                let status = upstream_response.status().as_u16();
+                let content_type = upstream_response
+                  .headers()
+                  .get(header::CONTENT_TYPE)
+                  .and_then(|v| v.to_str().ok())
+                  .map(|v| v.to_string());
+                let body_bytes = match upstream_response.into_body().collect().await {
+                  Ok(collected) => collected.to_bytes(),
+                  Err(error) => {
+                    upstream_error = Some(format!("failed to read upstream body: {error}"));
+                    Bytes::new()
+                  }
+                };
+                let body_text = String::from_utf8_lossy(&body_bytes)
+                  .chars()
+                  .take(4096)
+                  .collect::<String>();
+                upstream_payload = Some(serde_json::json!({
+                  "addr": upstream.addr,
+                  "status": status,
+                  "content_type": content_type,
+                  "body": body_text,
+                  "body_bytes": body_bytes.len(),
+                  "latency_ms": latency_ms,
+                }));
+              }
+              Ok(Err(error)) => {
+                upstream.record_failure();
+                MetricsRegistry::record_upstream(
+                  &upstream.addr,
+                  "error",
+                  upstream_start.elapsed().as_secs_f64() * 1_000.0,
+                );
+                upstream_error = Some(format!("upstream request failed: {error}"));
+              }
+              Err(_) => {
+                upstream.record_failure();
+                MetricsRegistry::record_upstream(
+                  &upstream.addr,
+                  "timeout",
+                  upstream_start.elapsed().as_secs_f64() * 1_000.0,
+                );
+                upstream_error = Some("upstream timeout".to_string());
+              }
+            }
+          }
+        }
+      }
+      Err(error) => {
+        upstream_error = Some(format!("no healthy upstream available: {error}"));
+      }
+    }
+  }
+
   let message = match &result.decision {
     Decision::Block { reason, .. } => format!("Blocked by {blocked_by}: {reason}"),
     Decision::RateLimit {
       retry_after_seconds,
     } => format!("Rate-limited by {blocked_by}; retry after {retry_after_seconds}s"),
-    _ => "Allowed by pipeline. Demo mode intentionally skips upstream forwarding.".to_string(),
+    _ => {
+      if let Some(error) = &upstream_error {
+        format!("Allowed by pipeline, but upstream failed: {error}")
+      } else if let Some(upstream) = &upstream_payload {
+        let status = upstream
+          .get("status")
+          .and_then(|v| v.as_u64())
+          .unwrap_or(0);
+        format!("Allowed by pipeline. Upstream responded with status {status}.")
+      } else {
+        "Allowed by pipeline.".to_string()
+      }
+    }
   };
 
   let layer_timings = result
@@ -140,7 +253,7 @@ pub async fn demo_check_handler(
     Decision::RateLimit { .. } => StatusCode::TOO_MANY_REQUESTS,
     _ => StatusCode::OK,
   };
-  let blocked = status != StatusCode::OK;
+  let blocked = result.is_blocked();
   let mut threat_tags: Vec<String> = context.threat_tags.iter().cloned().collect();
   threat_tags.sort();
   let total_duration_us = result.total_duration.as_micros();
@@ -153,6 +266,7 @@ pub async fn demo_check_handler(
   let method = payload.method.to_string();
   let path = payload.path.clone();
   let body = payload.body.clone();
+  let upstream_called = !result.is_blocked();
 
   let mut response = json_response(
     status,
@@ -187,7 +301,11 @@ pub async fn demo_check_handler(
         "layers_executed": layers_executed,
         "total_duration_us": total_duration_us,
         "decided_by": decided_by,
-      }
+        "lb_algorithm": lb_algorithm_label(&lb_algorithm),
+      },
+      "upstream": upstream_payload,
+      "upstream_error": upstream_error,
+      "upstream_called": upstream_called,
     }),
   );
   response
@@ -205,6 +323,7 @@ pub async fn proxy_handler(
   let max_body_bytes = cfg.gateway.max_body_bytes;
   let request_timeout = Duration::from_millis(cfg.gateway.request_timeout_ms);
   let trust_xff = cfg.gateway.trust_x_forwarded_for;
+  let lb_algorithm = cfg.lb.algorithm.clone();
   drop(cfg);
 
   let client_ip = extract_client_ip(request.headers(), remote_addr, trust_xff);
@@ -256,12 +375,17 @@ pub async fn proxy_handler(
     return block_response(result.decision, result.decided_by);
   }
 
-  let Some(upstream) = state.select_upstream() else {
-    return json_response(
-      StatusCode::BAD_GATEWAY,
-      serde_json::json!({ "error": "no healthy upstream available" }),
-    );
+  let upstream = match state.select_upstream() {
+    Ok(selection) => selection,
+    Err(error) => {
+      tracing::warn!(error = %error, "no healthy upstream available");
+      return json_response(
+        StatusCode::BAD_GATEWAY,
+        serde_json::json!({ "error": "no healthy upstream available" }),
+      );
+    }
   };
+  MetricsRegistry::record_lb_selection(&upstream.addr, lb_algorithm_label(&lb_algorithm));
 
   let upstream_uri = match build_upstream_uri(&upstream.addr, &parts.uri) {
     Ok(uri) => uri,
@@ -292,19 +416,42 @@ pub async fn proxy_handler(
 
   copy_forward_headers(parts.headers, outbound.headers_mut(), &upstream.addr);
 
+  let upstream_start = Instant::now();
   match tokio::time::timeout(request_timeout, state.http_client.request(outbound)).await {
-    Ok(Ok(upstream_response)) => map_upstream_response(upstream_response),
+    Ok(Ok(upstream_response)) => {
+      upstream.record_success();
+      MetricsRegistry::record_upstream(
+        &upstream.addr,
+        "success",
+        upstream_start.elapsed().as_secs_f64() * 1_000.0,
+      );
+      map_upstream_response(upstream_response)
+    }
     Ok(Err(error)) => {
+      upstream.record_failure();
+      MetricsRegistry::record_upstream(
+        &upstream.addr,
+        "error",
+        upstream_start.elapsed().as_secs_f64() * 1_000.0,
+      );
       tracing::warn!(error = %error, "upstream request failed");
       json_response(
         StatusCode::BAD_GATEWAY,
         serde_json::json!({ "error": "upstream request failed" }),
       )
     }
-    Err(_) => json_response(
-      StatusCode::GATEWAY_TIMEOUT,
-      serde_json::json!({ "error": "upstream timeout" }),
-    ),
+    Err(_) => {
+      upstream.record_failure();
+      MetricsRegistry::record_upstream(
+        &upstream.addr,
+        "timeout",
+        upstream_start.elapsed().as_secs_f64() * 1_000.0,
+      );
+      json_response(
+        StatusCode::GATEWAY_TIMEOUT,
+        serde_json::json!({ "error": "upstream timeout" }),
+      )
+    }
   }
 }
 
@@ -436,6 +583,14 @@ fn is_hop_by_hop(name: &HeaderName) -> bool {
     || value.eq_ignore_ascii_case("trailer")
     || value.eq_ignore_ascii_case("transfer-encoding")
     || value.eq_ignore_ascii_case("upgrade")
+}
+
+fn lb_algorithm_label(algo: &LbAlgorithm) -> &'static str {
+  match algo {
+    LbAlgorithm::RoundRobin => "round_robin",
+    LbAlgorithm::WeightedRoundRobin => "weighted_round_robin",
+    LbAlgorithm::LeastConnections => "least_connections",
+  }
 }
 
 fn decision_label(decision: &Decision) -> &'static str {

@@ -1,262 +1,260 @@
-//! Nexus Metrics — Prometheus instrumentation for the Nexus WAF.
-//!
-//! This crate provides comprehensive observability for the Nexus system:
-//! - Request rates and latency percentiles
-//! - Block rates by attack type
-//! - Per-layer processing time
-//! - ML inference metrics
-//! - Upstream health status
-//!
-//! # Usage
-//!
-//! Initialize metrics at startup:
-//! ```
-//! nexus_metrics::init();
-//! ```
-//!
-//! Record events throughout your application:
-//! ```
-//! use std::time::Duration;
-//!
-//! // Record a successful request
-//! nexus_metrics::record_request("GET", 200);
-//! nexus_metrics::record_request_duration(Duration::from_millis(42));
-//!
-//! // Record a blocked attack
-//! nexus_metrics::record_blocked("sqli");
-//!
-//! // Record layer timing
-//! nexus_metrics::record_layer_duration("lexical", Duration::from_micros(150));
-//!
-//! // Record ML inference
-//! nexus_metrics::record_ml_inference(Duration::from_millis(8), true);
-//!
-//! // Update gauges
-//! nexus_metrics::set_active_connections(42);
-//! nexus_metrics::set_upstream_health("192.168.1.10:8080", true);
-//!
-//! // Record rate limiting and rule matches
-//! nexus_metrics::record_rate_limited("203.0.113.42");
-//! nexus_metrics::record_rule_match("R001", "block");
-//! ```
-//!
-//! Export metrics for Prometheus scraping:
-//! ```
-//! let output = nexus_metrics::gather_metrics();
-//! // Serve this at GET /metrics
-//! ```
-
-mod exporter;
-mod metrics;
-mod recorder;
-
-// Re-export public API
-pub use exporter::gather_metrics;
-pub use recorder::{
-    record_blocked, record_layer_duration, record_ml_inference, record_rate_limited,
-    record_request, record_request_duration, record_rule_match, set_active_connections,
-    set_upstream_health,
+use axum::body::Body;
+use axum::http::{header, HeaderValue, StatusCode};
+use axum::response::Response;
+use axum::routing::get;
+use axum::Router;
+use once_cell::sync::Lazy;
+use prometheus::{
+  Encoder, HistogramOpts, HistogramVec, IntCounter, IntCounterVec, Opts, Registry, TextEncoder,
 };
 
-/// Initialize the metrics subsystem.
-///
-/// This forces registration of all metrics with the global Prometheus registry,
-/// ensuring they appear in the first scrape even before any requests arrive.
-///
-/// Safe to call multiple times; subsequent calls are no-ops.
-///
-/// # Example
-/// ```
-/// nexus_metrics::init();
-/// ```
-pub fn init() {
-    metrics::register_all();
+struct Metrics {
+  registry: Registry,
+  requests_total: IntCounterVec,
+  request_duration_ms: HistogramVec,
+  blocks_total: IntCounterVec,
+  layer_duration_us: HistogramVec,
+  rate_limit_total: IntCounter,
+  ml_duration_ms: HistogramVec,
+  rule_match_total: IntCounterVec,
+  upstream_requests_total: IntCounterVec,
+  upstream_latency_ms: HistogramVec,
+  lb_selected_total: IntCounterVec,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::Duration;
+static METRICS: Lazy<Metrics> = Lazy::new(|| {
+  let registry = Registry::new();
 
-    #[test]
-    fn test_init_does_not_panic() {
-        init();
-        init(); // Should be safe to call multiple times
+  let requests_total = IntCounterVec::new(
+    Opts::new(
+      "nexus_requests_total",
+      "Total requests observed by method and decision",
+    ),
+    &["method", "decision"],
+  )
+  .expect("requests_total metrics");
+
+  let request_duration_ms = HistogramVec::new(
+    HistogramOpts::new(
+      "nexus_request_duration_ms",
+      "Request latency distribution (ms)",
+    ),
+    &["method", "decision"],
+  )
+  .expect("request_duration_ms metrics");
+
+  let blocks_total = IntCounterVec::new(
+    Opts::new(
+      "nexus_blocks_total",
+      "Total blocked requests by layer and code",
+    ),
+    &["layer", "code"],
+  )
+  .expect("blocks_total metrics");
+
+  let layer_duration_us = HistogramVec::new(
+    HistogramOpts::new(
+      "nexus_layer_duration_us",
+      "Per-layer execution time (microseconds)",
+    )
+    .buckets(vec![
+      10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0, 2_500.0, 5_000.0, 10_000.0, 25_000.0,
+      50_000.0, 100_000.0, 250_000.0, 500_000.0, 1_000_000.0,
+    ]),
+    &["layer"],
+  )
+  .expect("layer_duration_us metrics");
+
+  let rate_limit_total = IntCounter::new(
+    "nexus_rate_limit_total",
+    "Total requests that were rate-limited",
+  )
+  .expect("rate_limit_total metrics");
+
+  let ml_duration_ms = HistogramVec::new(
+    HistogramOpts::new(
+      "nexus_ml_duration_ms",
+      "ML inference latency distribution (ms)",
+    ),
+    &["label"],
+  )
+  .expect("ml_duration_ms metrics");
+
+  let rule_match_total = IntCounterVec::new(
+    Opts::new(
+      "nexus_rule_match_total",
+      "Total rule matches by rule id and action",
+    ),
+    &["rule_id", "action"],
+  )
+  .expect("rule_match_total metrics");
+
+  let upstream_requests_total = IntCounterVec::new(
+    Opts::new(
+      "nexus_upstream_requests_total",
+      "Upstream requests by addr and result",
+    ),
+    &["addr", "result"],
+  )
+  .expect("upstream_requests_total metrics");
+
+  let upstream_latency_ms = HistogramVec::new(
+    HistogramOpts::new(
+      "nexus_upstream_latency_ms",
+      "Upstream request latency distribution (ms)",
+    ),
+    &["addr", "result"],
+  )
+  .expect("upstream_latency_ms metrics");
+
+  let lb_selected_total = IntCounterVec::new(
+    Opts::new(
+      "nexus_lb_selected_total",
+      "Load balancer selections by addr and algorithm",
+    ),
+    &["addr", "algorithm"],
+  )
+  .expect("lb_selected_total metrics");
+
+  registry
+    .register(Box::new(requests_total.clone()))
+    .expect("register requests_total");
+  registry
+    .register(Box::new(request_duration_ms.clone()))
+    .expect("register request_duration_ms");
+  registry
+    .register(Box::new(blocks_total.clone()))
+    .expect("register blocks_total");
+  registry
+    .register(Box::new(layer_duration_us.clone()))
+    .expect("register layer_duration_us");
+  registry
+    .register(Box::new(rate_limit_total.clone()))
+    .expect("register rate_limit_total");
+  registry
+    .register(Box::new(ml_duration_ms.clone()))
+    .expect("register ml_duration_ms");
+  registry
+    .register(Box::new(rule_match_total.clone()))
+    .expect("register rule_match_total");
+  registry
+    .register(Box::new(upstream_requests_total.clone()))
+    .expect("register upstream_requests_total");
+  registry
+    .register(Box::new(upstream_latency_ms.clone()))
+    .expect("register upstream_latency_ms");
+  registry
+    .register(Box::new(lb_selected_total.clone()))
+    .expect("register lb_selected_total");
+
+  Metrics {
+    registry,
+    requests_total,
+    request_duration_ms,
+    blocks_total,
+    layer_duration_us,
+    rate_limit_total,
+    ml_duration_ms,
+    rule_match_total,
+    upstream_requests_total,
+    upstream_latency_ms,
+    lb_selected_total,
+  }
+});
+
+pub struct MetricsRegistry;
+
+impl MetricsRegistry {
+  pub fn record_request(method: &str, decision: &str, duration_ms: f64) {
+    METRICS
+      .requests_total
+      .with_label_values(&[method, decision])
+      .inc();
+    METRICS
+      .request_duration_ms
+      .with_label_values(&[method, decision])
+      .observe(duration_ms);
+  }
+
+  pub fn record_block(layer: &str, code: &str) {
+    METRICS
+      .blocks_total
+      .with_label_values(&[layer, code])
+      .inc();
+  }
+
+  pub fn record_layer(layer: &str, duration_us: f64) {
+    METRICS
+      .layer_duration_us
+      .with_label_values(&[layer])
+      .observe(duration_us);
+  }
+
+  pub fn record_ml(duration_ms: f64, label: Option<&str>) {
+    METRICS
+      .ml_duration_ms
+      .with_label_values(&[label.unwrap_or("unknown")])
+      .observe(duration_ms);
+  }
+
+  pub fn record_rate_limit() {
+    METRICS.rate_limit_total.inc();
+  }
+
+  pub fn record_rule_match(rule_id: &str, action: &str) {
+    METRICS
+      .rule_match_total
+      .with_label_values(&[rule_id, action])
+      .inc();
+  }
+
+  pub fn record_upstream(addr: &str, result: &str, duration_ms: f64) {
+    METRICS
+      .upstream_requests_total
+      .with_label_values(&[addr, result])
+      .inc();
+    METRICS
+      .upstream_latency_ms
+      .with_label_values(&[addr, result])
+      .observe(duration_ms);
+  }
+
+  pub fn record_lb_selection(addr: &str, algorithm: &str) {
+    METRICS
+      .lb_selected_total
+      .with_label_values(&[addr, algorithm])
+      .inc();
+  }
+}
+
+pub async fn serve_metrics(addr: String) -> anyhow::Result<()> {
+  let router = Router::new().route("/metrics", get(metrics_handler));
+  let listener = tokio::net::TcpListener::bind(&addr).await?;
+  tracing::info!(addr = %addr, "metrics endpoint listening");
+  axum::serve(listener, router).await?;
+  Ok(())
+}
+
+async fn metrics_handler() -> Response<Body> {
+  let encoder = TextEncoder::new();
+  let metric_families = METRICS.registry.gather();
+  let mut buffer = Vec::new();
+  let status = match encoder.encode(&metric_families, &mut buffer) {
+    Ok(_) => StatusCode::OK,
+    Err(error) => {
+      tracing::error!(error = %error, "failed to encode metrics");
+      buffer = b"# metrics encode error\n".to_vec();
+      StatusCode::INTERNAL_SERVER_ERROR
     }
+  };
 
-    #[test]
-    fn test_record_request() {
-        record_request("GET", 200);
-        record_request("POST", 403);
-        // Verify metrics contain expected labels
-        let output = gather_metrics();
-        assert!(output.contains("nexus_requests_total"));
-    }
-
-    #[test]
-    fn test_record_request_duration() {
-        record_request_duration(Duration::from_millis(42));
-        record_request_duration(Duration::from_secs(1));
-        let output = gather_metrics();
-        assert!(output.contains("nexus_request_duration_ms"));
-    }
-
-    #[test]
-    fn test_record_blocked() {
-        record_blocked("sqli");
-        record_blocked("xss");
-        record_blocked("rule:R001");
-        let output = gather_metrics();
-        assert!(output.contains("nexus_blocked_requests_total"));
-    }
-
-    #[test]
-    fn test_record_layer_duration() {
-        record_layer_duration("rate", Duration::from_micros(100));
-        record_layer_duration("lexical", Duration::from_micros(150));
-        record_layer_duration("grammar", Duration::from_millis(1));
-        record_layer_duration("rules", Duration::from_micros(200));
-        record_layer_duration("ml", Duration::from_millis(10));
-        let output = gather_metrics();
-        assert!(output.contains("nexus_layer_duration_us"));
-    }
-
-    #[test]
-    fn test_record_ml_inference_with_detection() {
-        let before = gather_metrics();
-        let count_before = before
-            .lines()
-            .find(|line| line.starts_with("nexus_ml_detections_total"))
-            .and_then(|line| line.split_whitespace().nth(1))
-            .and_then(|s| s.parse::<f64>().ok())
-            .unwrap_or(0.0);
-
-        record_ml_inference(Duration::from_millis(8), true);
-
-        let after = gather_metrics();
-        let count_after = after
-            .lines()
-            .find(|line| line.starts_with("nexus_ml_detections_total"))
-            .and_then(|line| line.split_whitespace().nth(1))
-            .and_then(|s| s.parse::<f64>().ok())
-            .unwrap_or(0.0);
-
-        assert!(count_after > count_before, "ML detection counter should increase");
-    }
-
-    #[test]
-    fn test_record_ml_inference_without_detection() {
-        init(); // Ensure metric exists
-        
-        let before = gather_metrics();
-        let count_before = before
-            .lines()
-            .find(|line| line.starts_with("nexus_ml_detections_total"))
-            .and_then(|line| line.split_whitespace().nth(1))
-            .and_then(|s| s.parse::<f64>().ok())
-            .unwrap_or(0.0);
-
-        record_ml_inference(Duration::from_millis(5), false);
-
-        let after = gather_metrics();
-        let count_after = after
-            .lines()
-            .find(|line| line.starts_with("nexus_ml_detections_total"))
-            .and_then(|line| line.split_whitespace().nth(1))
-            .and_then(|s| s.parse::<f64>().ok())
-            .unwrap_or(0.0);
-
-        assert_eq!(count_after, count_before, "ML detection counter should not increase when detected=false");
-    }
-
-    #[test]
-    fn test_set_active_connections() {
-        set_active_connections(42);
-        set_active_connections(0);
-        set_active_connections(-5); // Should work with negative values
-        let output = gather_metrics();
-        assert!(output.contains("nexus_active_connections"));
-    }
-
-    #[test]
-    fn test_set_upstream_health() {
-        set_upstream_health("192.168.1.10:8080", true);
-        let output_healthy = gather_metrics();
-        assert!(output_healthy.contains("nexus_upstream_health"));
-
-        set_upstream_health("192.168.1.11:8080", false);
-        let output_unhealthy = gather_metrics();
-        
-        // Verify the gauge values are present
-        assert!(output_unhealthy.contains("upstream=\"192.168.1.10:8080\""));
-        assert!(output_unhealthy.contains("upstream=\"192.168.1.11:8080\""));
-    }
-
-    #[test]
-    fn test_record_rate_limited() {
-        record_rate_limited("203.0.113.42");
-        record_rate_limited("198.51.100.1");
-        let output = gather_metrics();
-        assert!(output.contains("nexus_rate_limited_total"));
-    }
-
-    #[test]
-    fn test_record_rule_match() {
-        record_rule_match("R001", "block");
-        record_rule_match("R002", "log");
-        record_rule_match("R003", "allow");
-        let output = gather_metrics();
-        assert!(output.contains("nexus_rule_matches_total"));
-    }
-
-    #[test]
-    fn test_gather_metrics_returns_valid_output() {
-        init();
-        
-        // Record some metrics
-        record_request("GET", 200);
-        record_blocked("sqli");
-        set_active_connections(5);
-        
-        let output = gather_metrics();
-        
-        // Should contain metric names
-        assert!(output.contains("nexus_requests_total"));
-        assert!(output.contains("nexus_blocked_requests_total"));
-        assert!(output.contains("nexus_active_connections"));
-        
-        // Should be valid Prometheus format (starts with # HELP or metric names)
-        assert!(!output.is_empty());
-        assert!(output.lines().any(|line| line.starts_with("# HELP") || line.starts_with("nexus_")));
-    }
-
-    #[test]
-    fn test_all_metrics_present_after_init() {
-        init();
-        
-        // Record at least one value for each metric so they appear in output
-        record_request("GET", 200);
-        record_request_duration(Duration::from_millis(10));
-        record_blocked("test");
-        record_layer_duration("test", Duration::from_micros(100));
-        record_ml_inference(Duration::from_millis(5), false);
-        set_active_connections(0);
-        set_upstream_health("test", true);
-        record_rate_limited("test");
-        record_rule_match("test", "test");
-        
-        let output = gather_metrics();
-        
-        // All metrics should be registered and appear in output
-        assert!(output.contains("nexus_requests_total"), "Missing nexus_requests_total");
-        assert!(output.contains("nexus_request_duration_ms"), "Missing nexus_request_duration_ms");
-        assert!(output.contains("nexus_blocked_requests_total"), "Missing nexus_blocked_requests_total");
-        assert!(output.contains("nexus_layer_duration_us"), "Missing nexus_layer_duration_us");
-        assert!(output.contains("nexus_ml_inference_duration_ms"), "Missing nexus_ml_inference_duration_ms");
-        assert!(output.contains("nexus_ml_detections_total"), "Missing nexus_ml_detections_total");
-        assert!(output.contains("nexus_active_connections"), "Missing nexus_active_connections");
-        assert!(output.contains("nexus_upstream_health"), "Missing nexus_upstream_health");
-        assert!(output.contains("nexus_rate_limited_total"), "Missing nexus_rate_limited_total");
-        assert!(output.contains("nexus_rule_matches_total"), "Missing nexus_rule_matches_total");
-    }
+  let mut response = Response::new(Body::from(buffer));
+  *response.status_mut() = status;
+  response.headers_mut().insert(
+    header::CONTENT_TYPE,
+    HeaderValue::from_str(encoder.format_type()).unwrap_or_else(|_| {
+      HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8")
+    }),
+  );
+  response
 }

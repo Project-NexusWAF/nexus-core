@@ -299,6 +299,21 @@
           </div>
 
           <div class="sub">
+            <h3>Upstream Response (Load Balanced)</h3>
+            <dl class="kv">
+              <dt>LB algorithm</dt><dd id="respLbAlgo">-</dd>
+              <dt>Upstream called</dt><dd id="respUpstreamCalled">-</dd>
+              <dt>Upstream addr</dt><dd id="respUpstreamAddr">-</dd>
+              <dt>Upstream status</dt><dd id="respUpstreamStatus">-</dd>
+              <dt>Latency (ms)</dt><dd id="respUpstreamLatency">-</dd>
+              <dt>Content type</dt><dd id="respUpstreamType">-</dd>
+              <dt>Body bytes</dt><dd id="respUpstreamBytes">-</dd>
+              <dt>Error</dt><dd id="respUpstreamError">-</dd>
+            </dl>
+            <pre id="respUpstreamBody">-</pre>
+          </div>
+
+          <div class="sub">
             <h3>Raw JSON Response</h3>
             <pre id="rawJson">{}</pre>
           </div>
@@ -386,6 +401,11 @@
         const decision = analysis.decision || data.decision || "-";
         const blockedBy = analysis.blocked_by || data.blocked_by || "none";
         const message = analysis.message || data.message || "-";
+        const upstream = data.upstream || {};
+        const upstreamError = data.upstream_error || "-";
+        const lbAlgo = analysis.lb_algorithm || "-";
+        const upstreamCalled = data.upstream_called ? "true" : "false";
+        const latency = upstream.latency_ms ? Number(upstream.latency_ms).toFixed(2) : "-";
 
         el("respHttpStatus").textContent = String(httpStatus);
         el("respDecision").textContent = decision;
@@ -399,6 +419,15 @@
         el("respDuration").textContent = String(analysis.total_duration_us ?? "-");
         el("respLayersExecuted").textContent = String(analysis.layers_executed ?? "-");
         el("respDecidedBy").textContent = analysis.decided_by || data.blocked_by || "none";
+        el("respUpstreamAddr").textContent = upstream.addr || "-";
+        el("respUpstreamStatus").textContent = String(upstream.status ?? "-");
+        el("respUpstreamLatency").textContent = latency;
+        el("respUpstreamType").textContent = upstream.content_type || "-";
+        el("respUpstreamBytes").textContent = String(upstream.body_bytes ?? "-");
+        el("respUpstreamError").textContent = upstreamError;
+        el("respUpstreamBody").textContent = upstream.body || "-";
+        el("respLbAlgo").textContent = lbAlgo;
+        el("respUpstreamCalled").textContent = upstreamCalled;
 
         const card = el("statusCard");
         if (httpStatus >= 500) {
@@ -442,6 +471,15 @@
         el("statusCard").textContent = "Running request...";
         el("layers").innerHTML = `<tr><td colspan="4">Running...</td></tr>`;
         el("rawJson").textContent = "{}";
+        el("respUpstreamAddr").textContent = "-";
+        el("respUpstreamStatus").textContent = "-";
+        el("respUpstreamLatency").textContent = "-";
+        el("respUpstreamType").textContent = "-";
+        el("respUpstreamBytes").textContent = "-";
+        el("respUpstreamError").textContent = "-";
+        el("respUpstreamBody").textContent = "-";
+        el("respLbAlgo").textContent = "-";
+        el("respUpstreamCalled").textContent = "-";
       }
 
       function renderError(message) {
@@ -459,10 +497,19 @@
           "respDuration",
           "respLayersExecuted",
           "respDecidedBy",
+          "respUpstreamAddr",
+          "respUpstreamStatus",
+          "respUpstreamLatency",
+          "respUpstreamType",
+          "respUpstreamBytes",
+          "respUpstreamError",
+          "respLbAlgo",
+          "respUpstreamCalled",
         ];
         for (const id of fields) {
           el(id).textContent = "-";
         }
+        el("respUpstreamBody").textContent = "-";
         el("layers").innerHTML = `<tr><td colspan="4">${escapeHtml(message)}</td></tr>`;
       }
 

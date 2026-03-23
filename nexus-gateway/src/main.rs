@@ -1,5 +1,4 @@
 mod commands;
-mod metrics_placeholder;
 mod proxy;
 mod server;
 mod state;

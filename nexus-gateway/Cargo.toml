@@ -21,6 +21,8 @@ hyper-util = { workspace = true }
 nexus-common = { workspace = true }
 nexus-config = { workspace = true }
 nexus-control = { workspace = true }
+nexus-lb = { workspace = true }
+nexus-metrics = { workspace = true }
 nexus-pipeline = { workspace = true }
 nexus-store = { workspace = true }
 parking_lot = { workspace = true }

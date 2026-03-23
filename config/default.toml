@@ -31,12 +31,14 @@ risk_delta = 0.4
 block_on_match = false
 
 [lb]
-algorithm = "round_robin"
+algorithm = "weighted_round_robin"
 health_check_interval_secs = 10
 unhealthy_threshold = 3
 healthy_threshold = 2
 upstreams = [
-  { name = "backend-1", addr = "127.0.0.1:3000", weight = 1, enabled = true }
+  { name = "backend-1", addr = "127.0.0.1:3001", weight = 2, enabled = true },
+  { name = "backend-2", addr = "127.0.0.1:3002", weight = 1, enabled = true },
+  { name = "backend-3", addr = "127.0.0.1:3003", weight = 3, enabled = true }
 ]
 
 [rules]

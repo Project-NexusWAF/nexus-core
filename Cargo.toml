@@ -8,6 +8,7 @@ members = [
   "nexus-rules",
   "nexus-ml-client",
   "nexus-store",
+  "nexus-demo-backends",
   "nexus-pipeline",
   "nexus-control",
   "nexus-gateway",

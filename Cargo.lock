@@ -1698,6 +1698,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexus-demo-backends"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum 0.7.9",
+ "clap",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "nexus-gateway"
 version = "0.1.0"
 dependencies = [
@@ -1712,6 +1726,8 @@ dependencies = [
  "nexus-common",
  "nexus-config",
  "nexus-control",
+ "nexus-lb",
+ "nexus-metrics",
  "nexus-pipeline",
  "nexus-store",
  "nix",
@@ -1777,9 +1793,12 @@ dependencies = [
 name = "nexus-metrics"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "axum 0.7.9",
  "nexus-common",
  "once_cell",
  "prometheus",
+ "tokio",
  "tracing",
 ]
 
@@ -1792,6 +1811,7 @@ dependencies = [
  "http 1.4.0",
  "nexus-common",
  "nexus-config",
+ "nexus-metrics",
  "parking_lot 0.12.5",
  "prost",
  "tokio",
@@ -1811,6 +1831,7 @@ dependencies = [
  "nexus-config",
  "nexus-grammar",
  "nexus-lex",
+ "nexus-metrics",
  "nexus-ml-client",
  "nexus-rate",
  "nexus-rules",
@@ -1844,6 +1865,7 @@ dependencies = [
  "http 1.4.0",
  "nexus-common",
  "nexus-config",
+ "nexus-metrics",
  "once_cell",
  "parking_lot 0.12.5",
  "regex",

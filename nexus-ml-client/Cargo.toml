@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 nexus-common = { workspace = true }
 nexus-config = { workspace = true }
+nexus-metrics = { workspace = true }
 tonic = { workspace = true }
 prost = { workspace = true }
 tokio = { workspace = true }

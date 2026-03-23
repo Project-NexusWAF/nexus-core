@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 
 use crate::client::MlClient;
+use nexus_metrics::MetricsRegistry;
 
 pub struct MlLayer {
   client: MlClient,
@@ -51,6 +52,7 @@ impl nexus_common::InnerLayer for MlLayer {
     }
 
     let result = self.client.classify(ctx).await;
+    MetricsRegistry::record_ml(result.duration.as_secs_f64() * 1_000.0, Some(&result.label));
 
     ctx.ml_score = Some(result.score);
     ctx.ml_label = Some(result.label.clone());

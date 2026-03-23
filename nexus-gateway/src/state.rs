@@ -1,5 +1,6 @@
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context;
 use bytes::Bytes;
@@ -9,9 +10,11 @@ use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use nexus_config::{Config, LiveConfig};
 use nexus_control::ControlAppState;
+use nexus_lb::LoadBalancer;
 use nexus_pipeline::{Pipeline, PipelineBuilder};
 use nexus_store::{LogWriter, StorePool};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
+use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
 pub type HyperClient = Client<HttpConnector, Full<Bytes>>;
@@ -19,7 +22,29 @@ pub type HyperClient = Client<HttpConnector, Full<Bytes>>;
 pub struct AppState {
   pub control: Arc<ControlAppState>,
   pub http_client: HyperClient,
-  pub upstream_rr: AtomicUsize,
+  lb: RwLock<Arc<LoadBalancer>>,
+  lb_health: Mutex<Option<JoinHandle<()>>>,
+}
+
+pub struct UpstreamSelection {
+  pub addr: String,
+  lb: Arc<LoadBalancer>,
+}
+
+impl UpstreamSelection {
+  pub fn record_success(&self) {
+    self.lb.record_success(&self.addr);
+  }
+
+  pub fn record_failure(&self) {
+    self.lb.record_failure(&self.addr);
+  }
+}
+
+impl Drop for UpstreamSelection {
+  fn drop(&mut self) {
+    self.lb.release_connection(&self.addr);
+  }
 }
 
 impl AppState {
@@ -63,10 +88,14 @@ impl AppState {
       admin_token,
     });
 
+    let lb = LoadBalancer::from_config(&config.lb);
+    let lb_health = spawn_lb_health(Arc::clone(&lb), config.lb.health_check_interval_secs);
+
     Ok(Arc::new(Self {
       control,
       http_client: build_http_client(),
-      upstream_rr: AtomicUsize::new(0),
+      lb: RwLock::new(lb),
+      lb_health: Mutex::new(Some(lb_health)),
     }))
   }
 
@@ -74,21 +103,21 @@ impl AppState {
     self.control.live_config.borrow().clone()
   }
 
-  pub fn select_upstream(&self) -> Option<nexus_config::UpstreamConfig> {
-    let cfg = self.active_config();
-    let enabled: Vec<_> = cfg
-      .lb
-      .upstreams
-      .iter()
-      .filter(|upstream| upstream.enabled)
-      .cloned()
-      .collect();
-    if enabled.is_empty() {
-      return None;
-    }
+  pub fn select_upstream(&self) -> nexus_common::Result<UpstreamSelection> {
+    let lb = self.lb.read().clone();
+    let addr = lb.select()?;
+    Ok(UpstreamSelection { addr, lb })
+  }
 
-    let index = self.upstream_rr.fetch_add(1, Ordering::Relaxed) % enabled.len();
-    enabled.get(index).cloned()
+  pub fn update_load_balancer(&self, cfg: &nexus_config::schema::LbConfig) {
+    let lb = LoadBalancer::from_config(cfg);
+    *self.lb.write() = Arc::clone(&lb);
+
+    let mut guard = self.lb_health.lock();
+    if let Some(handle) = guard.take() {
+      handle.abort();
+    }
+    *guard = Some(spawn_lb_health(lb, cfg.health_check_interval_secs));
   }
 
   pub fn clone_pipeline(&self) -> Pipeline {
@@ -101,6 +130,11 @@ fn build_http_client() -> HyperClient {
     .pool_idle_timeout(std::time::Duration::from_secs(90))
     .pool_max_idle_per_host(32)
     .build(HttpConnector::new())
+}
+
+fn spawn_lb_health(lb: Arc<LoadBalancer>, interval_secs: u64) -> JoinHandle<()> {
+  let interval = Duration::from_secs(interval_secs.max(1));
+  tokio::spawn(nexus_lb::health::run_health_checks(lb, interval))
 }
 
 async fn sync_rules_file_to_store(
