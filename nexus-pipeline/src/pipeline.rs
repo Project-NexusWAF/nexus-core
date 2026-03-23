@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::metrics_placeholder::MetricsRegistry;
 use nexus_common::{BlockCode, Decision, Layer, RequestContext, Result};
+use nexus_metrics::MetricsRegistry;
 use tracing::{debug, info, warn};
 
 use crate::run_result::{LayerTiming, RunResult};

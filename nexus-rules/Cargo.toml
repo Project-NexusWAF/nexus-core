@@ -9,6 +9,7 @@ license.workspace     = true
 [dependencies]
 nexus-common = { workspace = true }
 nexus-config = { workspace = true }
+nexus-metrics = { workspace = true }
 serde        = { workspace = true }
 toml         = { workspace = true }
 tracing      = { workspace = true }

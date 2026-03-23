@@ -32,6 +32,7 @@ pub fn spawn_config_reload_task(state: Arc<AppState>) {
       }
 
       let cfg = rx.borrow().clone();
+      state.update_load_balancer(&cfg.lb);
       let pipeline = PipelineBuilder::from_config(&cfg);
       match pipeline.init().await {
         Ok(()) => {

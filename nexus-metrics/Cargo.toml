@@ -4,7 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-nexus-common = { path = "../nexus-common" }
-prometheus = { workspace = true }
+nexus-common = { workspace = true }
+anyhow = { workspace = true }
+axum = { workspace = true }
 once_cell = { workspace = true }
+prometheus = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }

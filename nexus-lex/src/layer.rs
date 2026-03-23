@@ -107,11 +107,12 @@ impl InnerLayer for LexicalLayer {
       let severity = threat_match.category.severity();
       if worst_category
         .as_ref()
-        .map_or(true, |w| severity > w.severity())
+        .is_some_and(|w| severity <= w.severity())
       {
-        worst_category = Some(threat_match.category.clone());
-        worst_pattern = threat_match.pattern;
+        continue;
       }
+      worst_category = Some(threat_match.category.clone());
+      worst_pattern = threat_match.pattern;
     }
 
     // ── Decision ──────────────────────────────────────────────────────

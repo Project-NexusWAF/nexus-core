@@ -10,7 +10,6 @@ use nexus_config::{Config, ConfigLoader, ConfigWatcher};
 #[cfg(unix)]
 use nexus_pipeline::PipelineBuilder;
 
-use crate::metrics_placeholder;
 use crate::server;
 use crate::state::AppState;
 
@@ -53,7 +52,7 @@ pub async fn cmd_start(config_path: String, listen_override: Option<String>) -> 
     config.gateway.rest_addr.clone(),
     Arc::clone(&state),
   ));
-  let metrics_handle = tokio::spawn(metrics_placeholder::serve_metrics(
+  let metrics_handle = tokio::spawn(nexus_metrics::serve_metrics(
     config.gateway.metrics_addr.clone(),
   ));
 

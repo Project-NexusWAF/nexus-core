@@ -1,5 +1,6 @@
 use crate::rule::{RuleAction, RuleSet};
 use nexus_common::{BlockCode, Decision, RequestContext};
+use nexus_metrics::MetricsRegistry;
 use parking_lot::RwLock;
 use std::path::Path;
 use std::sync::Arc;
@@ -27,6 +28,7 @@ impl RuleEngine {
         match &rule.action {
           RuleAction::Block => {
             ctx.tag(&rule.id, "rules");
+            MetricsRegistry::record_rule_match(&rule.id, "block");
             tracing::warn!(
                 rule_id = %rule.id,
                 rule_name = %rule.name,
@@ -41,6 +43,7 @@ impl RuleEngine {
             ));
           }
           RuleAction::Allow => {
+            MetricsRegistry::record_rule_match(&rule.id, "allow");
             tracing::info!(
                 rule_id = %rule.id,
                 rule_name = %rule.name,
@@ -53,6 +56,7 @@ impl RuleEngine {
           }
           RuleAction::Log => {
             ctx.tag(&rule.id, "rules");
+            MetricsRegistry::record_rule_match(&rule.id, "log");
             tracing::info!(
                 rule_id = %rule.id,
                 rule_name = %rule.name,
