@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use nexus_config::Config;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -10,6 +11,14 @@ pub struct HealthSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct UpstreamStatusView {
+  pub name: String,
+  pub addr: String,
+  pub status: String,
+  pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct StatsSnapshot {
   pub requests_total: u64,
   pub blocked_total: u64,
@@ -18,6 +27,7 @@ pub struct StatsSnapshot {
   pub config_version: u64,
   pub ml_circuit_state: String,
   pub healthy_upstreams: usize,
+  pub upstreams: Vec<UpstreamStatusView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -68,6 +78,20 @@ pub struct PaginatedLogs {
   pub page: i64,
   pub limit: i64,
   pub items: Vec<AttackLogEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigSnapshot {
+  pub version: u64,
+  pub config: Config,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigLogEntry {
+  pub timestamp: DateTime<Utc>,
+  pub version: u64,
+  pub status: String,
+  pub message: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

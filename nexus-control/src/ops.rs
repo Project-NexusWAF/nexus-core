@@ -1,13 +1,16 @@
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use anyhow::{bail, Context};
 use chrono::{DateTime, Utc};
+use nexus_lb::UpstreamStatus;
 use sqlx::{Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use crate::stats::{
-  AttackLogEntry, HealthSnapshot, PaginatedLogs, RuleVersionView, RulesPayload, StatsSnapshot,
+  AttackLogEntry, ConfigLogEntry, ConfigSnapshot, HealthSnapshot, PaginatedLogs, RuleVersionView,
+  RulesPayload, StatsSnapshot, UpstreamStatusView,
 };
 use crate::ControlAppState;
 
@@ -34,13 +37,39 @@ pub fn stats_snapshot(state: &Arc<ControlAppState>) -> StatsSnapshot {
   let layer_names = pipeline.layer_names();
   drop(pipeline);
 
-  let healthy_upstreams = state
-    .live_config
-    .borrow()
+  let cfg = state.live_config.borrow().clone();
+  let lb = state.load_balancer.read().clone();
+  let status_map: HashMap<String, UpstreamStatus> =
+    lb.statuses().into_iter().collect();
+
+  let upstreams: Vec<UpstreamStatusView> = cfg
     .lb
     .upstreams
     .iter()
-    .filter(|u| u.enabled)
+    .map(|u| {
+      let status = if !u.enabled {
+        "disabled".to_string()
+      } else {
+        match status_map.get(&u.addr) {
+          Some(UpstreamStatus::Healthy) => "healthy".to_string(),
+          Some(UpstreamStatus::Unhealthy) => "unhealthy".to_string(),
+          Some(UpstreamStatus::Unknown) => "unknown".to_string(),
+          None => "unknown".to_string(),
+        }
+      };
+
+      UpstreamStatusView {
+        name: u.name.clone(),
+        addr: u.addr.clone(),
+        status,
+        enabled: u.enabled,
+      }
+    })
+    .collect();
+
+  let healthy_upstreams = upstreams
+    .iter()
+    .filter(|u| u.status == "healthy")
     .count();
 
   StatsSnapshot {
@@ -52,7 +81,20 @@ pub fn stats_snapshot(state: &Arc<ControlAppState>) -> StatsSnapshot {
     // Placeholder until ML layer exposes circuit state through public API.
     ml_circuit_state: "unknown".to_string(),
     healthy_upstreams,
+    upstreams,
   }
+}
+
+pub fn config_snapshot(state: &Arc<ControlAppState>) -> ConfigSnapshot {
+  let cfg = state.live_config.borrow().clone();
+  ConfigSnapshot {
+    version: state.config_version.load(Ordering::Relaxed),
+    config: sanitize_config(&cfg),
+  }
+}
+
+pub fn list_config_logs(state: &Arc<ControlAppState>) -> Vec<ConfigLogEntry> {
+  state.config_log.read().clone()
 }
 
 pub async fn get_rules(state: &Arc<ControlAppState>) -> anyhow::Result<RulesPayload> {
@@ -266,6 +308,40 @@ fn parse_timestamp(value: Option<&str>) -> anyhow::Result<Option<DateTime<Utc>>>
   Ok(Some(parsed.with_timezone(&Utc)))
 }
 
+fn sanitize_config(cfg: &nexus_config::Config) -> nexus_config::Config {
+  let mut cfg = cfg.clone();
+
+  if let Some(token) = cfg.gateway.auth_token.as_mut() {
+    if !token.trim().is_empty() {
+      *token = "redacted".to_string();
+    }
+  }
+
+  if !cfg.store.influx_token.trim().is_empty() {
+    cfg.store.influx_token = "redacted".to_string();
+  }
+
+  cfg.store.postgres_url = redact_url(&cfg.store.postgres_url);
+  cfg
+}
+
+fn redact_url(value: &str) -> String {
+  let Some(scheme_end) = value.find("://") else {
+    return value.to_string();
+  };
+  let Some(at) = value.find('@') else {
+    return value.to_string();
+  };
+  let creds = &value[(scheme_end + 3)..at];
+  let Some(colon) = creds.find(':') else {
+    return value.to_string();
+  };
+  let user = &creds[..colon];
+  let scheme = &value[..scheme_end];
+  let rest = &value[(at + 1)..];
+  format!("{scheme}://{user}:redacted@{rest}")
+}
+
 #[cfg(test)]
 mod tests {
   use std::sync::atomic::AtomicU64;
@@ -274,6 +350,7 @@ mod tests {
   use super::update_rules;
   use crate::ControlAppState;
   use nexus_config::{ConfigLoader, LiveConfig};
+  use nexus_lb::LoadBalancer;
   use nexus_pipeline::PipelineBuilder;
   use parking_lot::RwLock;
   use tokio::sync::watch;
@@ -306,11 +383,17 @@ rules_file = "{rules_file}"
     let (_tx, rx): (_, LiveConfig) = watch::channel(Arc::clone(&config));
 
     let pipeline = PipelineBuilder::from_config(&config);
+    let load_balancer = LoadBalancer::from_config(&config.lb);
+    let load_balancer = Arc::new(RwLock::new(Arc::clone(&load_balancer)));
+    let config_log = Arc::new(RwLock::new(Vec::new()));
+
     Arc::new(ControlAppState {
       config,
       live_config: rx,
       pipeline: RwLock::new(pipeline),
+      load_balancer,
       config_version: Arc::new(AtomicU64::new(1)),
+      config_log,
       requests_total: AtomicU64::new(0),
       blocked_total: AtomicU64::new(0),
       rate_limited_total: AtomicU64::new(0),

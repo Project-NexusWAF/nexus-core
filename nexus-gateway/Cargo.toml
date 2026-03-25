@@ -13,6 +13,7 @@ path = "src/main.rs"
 anyhow = { workspace = true }
 axum = { workspace = true }
 bytes = { workspace = true }
+chrono = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
 http = { workspace = true }
 http-body-util = { workspace = true }

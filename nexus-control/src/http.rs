@@ -26,6 +26,8 @@ pub fn rest_router(state: Arc<ControlAppState>) -> Router {
       get(get_rules_handler).post(update_rules_handler),
     )
     .route("/api/rules/versions", get(rule_versions_handler))
+    .route("/api/config", get(config_handler))
+    .route("/api/config/logs", get(config_logs_handler))
     .layer(middleware::from_fn_with_state(
       token,
       crate::auth::require_auth,
@@ -117,6 +119,14 @@ async fn rule_versions_handler(State(state): State<Arc<ControlAppState>>) -> imp
     ),
     Err(error) => internal_error(error),
   }
+}
+
+async fn config_handler(State(state): State<Arc<ControlAppState>>) -> impl IntoResponse {
+  (StatusCode::OK, Json(ops::config_snapshot(&state)))
+}
+
+async fn config_logs_handler(State(state): State<Arc<ControlAppState>>) -> impl IntoResponse {
+  (StatusCode::OK, Json(ops::list_config_logs(&state)))
 }
 
 fn internal_error(error: anyhow::Error) -> (StatusCode, Json<serde_json::Value>) {

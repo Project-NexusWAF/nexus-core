@@ -4,11 +4,13 @@ use std::time::Duration;
 
 use anyhow::Context;
 use bytes::Bytes;
+use chrono::Utc;
 use http_body_util::Full;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use nexus_config::{Config, LiveConfig};
+use nexus_control::stats::ConfigLogEntry;
 use nexus_control::ControlAppState;
 use nexus_lb::LoadBalancer;
 use nexus_pipeline::{Pipeline, PipelineBuilder};
@@ -22,7 +24,7 @@ pub type HyperClient = Client<HttpConnector, Full<Bytes>>;
 pub struct AppState {
   pub control: Arc<ControlAppState>,
   pub http_client: HyperClient,
-  lb: RwLock<Arc<LoadBalancer>>,
+  lb: Arc<RwLock<Arc<LoadBalancer>>>,
   lb_health: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -75,11 +77,22 @@ impl AppState {
       }
     };
 
+    let lb = LoadBalancer::from_config(&config.lb);
+    let lb_handle = Arc::new(RwLock::new(Arc::clone(&lb)));
+    let config_log = Arc::new(RwLock::new(vec![ConfigLogEntry {
+      timestamp: Utc::now(),
+      version: 1,
+      status: "applied".to_string(),
+      message: "initial config loaded".to_string(),
+    }]));
+
     let control = Arc::new(ControlAppState {
       config: Arc::clone(&config),
       live_config,
       pipeline: RwLock::new(pipeline),
+      load_balancer: Arc::clone(&lb_handle),
       config_version: Arc::new(AtomicU64::new(1)),
+      config_log,
       requests_total: AtomicU64::new(0),
       blocked_total: AtomicU64::new(0),
       rate_limited_total: AtomicU64::new(0),
@@ -88,13 +101,12 @@ impl AppState {
       admin_token,
     });
 
-    let lb = LoadBalancer::from_config(&config.lb);
     let lb_health = spawn_lb_health(Arc::clone(&lb), config.lb.health_check_interval_secs);
 
     Ok(Arc::new(Self {
       control,
       http_client: build_http_client(),
-      lb: RwLock::new(lb),
+      lb: lb_handle,
       lb_health: Mutex::new(Some(lb_health)),
     }))
   }
