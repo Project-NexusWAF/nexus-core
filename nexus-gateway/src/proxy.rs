@@ -58,7 +58,12 @@ pub async fn proxy_handler(
   state.control.requests_total.fetch_add(1, Ordering::Relaxed);
   if should_record_attack_event(&context, &result.decision) {
     if let Some(writer) = &state.control.log_writer {
-      let event = nexus_store::BlockedEvent::from_context(&context, &result.decision);
+      let event = nexus_store::BlockedEvent::from_context(
+        &context,
+        &result.decision,
+        result.decided_by,
+        result.final_risk_score,
+      );
       writer.record(event);
     }
   }

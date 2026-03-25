@@ -33,10 +33,7 @@ pub fn rest_router(state: Arc<ControlAppState>) -> Router {
       crate::auth::require_auth,
     ));
 
-  let public = Router::new()
-    .route("/api/health", get(health_handler))
-    .route("/", get(crate::dashboard::serve_dashboard))
-    .route("/*path", get(crate::dashboard::serve_dashboard));
+  let public = Router::new().route("/api/health", get(health_handler));
 
   Router::new()
     .merge(protected)
