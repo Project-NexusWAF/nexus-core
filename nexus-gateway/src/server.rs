@@ -4,11 +4,13 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use axum::{
-  routing::{any, get},
+  routing::any,
   Router,
 };
+use chrono::Utc;
 use nexus_control::proto::control_plane_server::ControlPlaneServer;
 use nexus_control::server::ControlServer;
+use nexus_control::stats::ConfigLogEntry;
 use nexus_pipeline::PipelineBuilder;
 use tracing_subscriber::EnvFilter;
 
@@ -39,13 +41,42 @@ pub fn spawn_config_reload_task(state: Arc<AppState>) {
           *state.control.pipeline.write() = pipeline;
           let version = state.control.config_version.fetch_add(1, Ordering::SeqCst) + 1;
           tracing::info!(config_version = version, "live config applied to pipeline");
+          push_config_log(
+            &state,
+            ConfigLogEntry {
+              timestamp: Utc::now(),
+              version,
+              status: "applied".to_string(),
+              message: "config reloaded from watcher".to_string(),
+            },
+          );
         }
         Err(error) => {
           tracing::error!(error = %error, "failed to apply live config update; keeping current pipeline");
+          let version = state.control.config_version.load(Ordering::Relaxed);
+          push_config_log(
+            &state,
+            ConfigLogEntry {
+              timestamp: Utc::now(),
+              version,
+              status: "error".to_string(),
+              message: format!("config reload failed: {error}"),
+            },
+          );
         }
       }
     }
   });
+}
+
+fn push_config_log(state: &Arc<AppState>, entry: ConfigLogEntry) {
+  let mut log = state.control.config_log.write();
+  log.push(entry);
+  const MAX_ENTRIES: usize = 200;
+  if log.len() > MAX_ENTRIES {
+    let excess = log.len() - MAX_ENTRIES;
+    log.drain(0..excess);
+  }
 }
 
 pub async fn run_gateway(addr: String, state: Arc<AppState>) -> anyhow::Result<()> {
@@ -55,8 +86,6 @@ pub async fn run_gateway(addr: String, state: Arc<AppState>) -> anyhow::Result<(
   tracing::info!(addr = %addr, "HTTP proxy listening");
 
   let router = Router::new()
-    .route("/demo", get(proxy::demo_page))
-    .route("/demo/check", get(proxy::demo_check_handler))
     .fallback(any(proxy::proxy_handler))
     .with_state(state);
   axum::serve(
