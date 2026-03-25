@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use axum::{
-  routing::{any, get},
+  routing::any,
   Router,
 };
 use nexus_control::proto::control_plane_server::ControlPlaneServer;
@@ -55,8 +55,6 @@ pub async fn run_gateway(addr: String, state: Arc<AppState>) -> anyhow::Result<(
   tracing::info!(addr = %addr, "HTTP proxy listening");
 
   let router = Router::new()
-    .route("/demo", get(proxy::demo_page))
-    .route("/demo/check", get(proxy::demo_check_handler))
     .fallback(any(proxy::proxy_handler))
     .with_state(state);
   axum::serve(

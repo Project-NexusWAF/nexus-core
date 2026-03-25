@@ -38,7 +38,7 @@ healthy_threshold = 2
 upstreams = [
   { name = "backend-1", addr = "127.0.0.1:5001", weight = 2, enabled = true },
   { name = "backend-2", addr = "127.0.0.1:5002", weight = 1, enabled = true },
-  { name = "backend-3", addr = "127.0.0.1:5003", weight = 3, enabled = true }
+  # { name = "backend-3", addr = "127.0.0.1:5003", weight = 3, enabled = true }
 ]
 
 [rules]

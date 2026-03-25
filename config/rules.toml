@@ -92,3 +92,39 @@ description = "If earlier layers raise risk significantly, force a block."
 [rules.condition]
 type = "risk_above"
 threshold = 0.85
+
+[[rules]]
+id = "R009"
+name = "Block XXE payloads"
+enabled = true
+priority = 50
+action = "block"
+description = "Detect XML external entity payloads."
+[rules.condition]
+type = "regex_match"
+target = "body"
+pattern = '(?i)<!doctype|<!entity'
+
+[[rules]]
+id = "R010"
+name = "Block Log4Shell JNDI lookups in URI"
+enabled = true
+priority = 55
+action = "block"
+description = "Block JNDI lookup payloads in query strings or paths."
+[rules.condition]
+type = "regex_match"
+target = "uri"
+pattern = '(?i)\$\{\s*jndi\s*:(?:ldap|rmi|dns|ldaps|nis|iiop|corba)://[^}]+\}'
+
+[[rules]]
+id = "R011"
+name = "Block Log4Shell JNDI lookups in body"
+enabled = true
+priority = 56
+action = "block"
+description = "Block JNDI lookup payloads in request bodies."
+[rules.condition]
+type = "regex_match"
+target = "body"
+pattern = '(?i)\$\{\s*jndi\s*:(?:ldap|rmi|dns|ldaps|nis|iiop|corba)://[^}]+\}'
