@@ -27,7 +27,12 @@ pub struct BlockedEvent {
 impl BlockedEvent {
   /// Build from a RequestContext and its Decision.
   /// Call this after pipeline execution, never from inside a layer.
-  pub fn from_context(ctx: &RequestContext, decision: &Decision) -> Self {
+  pub fn from_context(
+    ctx: &RequestContext,
+    decision: &Decision,
+    decided_by: Option<&str>,
+    final_risk_score: f32,
+  ) -> Self {
     let (decision_str, block_code) = match decision {
       Decision::Block { code, .. } => ("Block".to_string(), Some(format!("{code:?}"))),
       Decision::RateLimit { .. } => ("RateLimit".to_string(), None),
@@ -38,16 +43,25 @@ impl BlockedEvent {
     let mut threat_tags: Vec<String> = ctx.threat_tags.iter().cloned().collect();
     threat_tags.sort();
 
+    let blocked_by = if decision.is_blocking() {
+      decided_by.map(|value| value.to_string())
+    } else {
+      ctx
+        .flagged_by
+        .clone()
+        .or_else(|| decided_by.map(|value| value.to_string()))
+    };
+
     Self {
       id: Uuid::new_v4(),
       timestamp: Utc::now(),
       client_ip: ctx.client_ip,
       uri: ctx.uri.clone(),
       method: ctx.method.0.as_str().to_string(),
-      risk_score: ctx.risk_score,
+      risk_score: final_risk_score,
       decision: decision_str,
       threat_tags,
-      blocked_by: ctx.flagged_by.clone(),
+      blocked_by,
       ml_score: ctx.ml_score,
       ml_label: ctx.ml_label.clone(),
       block_code,
@@ -186,7 +200,8 @@ mod tests {
     ctx.ml_label = Some("threat".to_string());
 
     let decision = Decision::block("attack detected", BlockCode::SqlInjection);
-    let event = BlockedEvent::from_context(&ctx, &decision);
+    let event =
+      BlockedEvent::from_context(&ctx, &decision, Some("rules"), ctx.risk_score);
 
     assert_eq!(event.client_ip, ctx.client_ip);
     assert_eq!(event.uri, ctx.uri);
@@ -194,7 +209,7 @@ mod tests {
     assert_eq!(event.decision, "Block");
     assert_eq!(event.block_code, Some("SqlInjection".to_string()));
     assert!(event.threat_tags.contains(&"sqli".to_string()));
-    assert_eq!(event.blocked_by, Some("lexical".to_string()));
+    assert_eq!(event.blocked_by, Some("rules".to_string()));
     assert_eq!(event.ml_score, Some(0.97));
     assert_eq!(event.ml_label, Some("threat".to_string()));
   }
@@ -212,7 +227,8 @@ mod tests {
     ctx.tag("sqli", "rules");
 
     let decision = Decision::block("blocked", BlockCode::SqlInjection);
-    let event = BlockedEvent::from_context(&ctx, &decision);
+    let event =
+      BlockedEvent::from_context(&ctx, &decision, Some("rules"), ctx.risk_score);
 
     let mut query_builder: QueryBuilder<'_, Postgres> = QueryBuilder::new(
       "INSERT INTO attack_logs \
