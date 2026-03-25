@@ -5,7 +5,7 @@ rest_addr = "0.0.0.0:9091"
 metrics_addr = "0.0.0.0:9092"
 max_body_bytes = 1048576
 request_timeout_ms = 30000
-worker_threads = 0
+worker_threads = 10
 trust_x_forwarded_for = true
 # pid_file = "/tmp/nexus-gateway.pid"  # optional: defaults to OS temp dir
 auth_token = "70e9afc94640ba77445fa6643b2af8f6da6ed2b38fd12681ac0d3a2ab37d490a"             # optional: or set NEXUS_ADMIN_TOKEN env
@@ -36,9 +36,9 @@ health_check_interval_secs = 10
 unhealthy_threshold = 3
 healthy_threshold = 2
 upstreams = [
-  { name = "backend-1", addr = "127.0.0.1:3001", weight = 2, enabled = true },
-  { name = "backend-2", addr = "127.0.0.1:3002", weight = 1, enabled = true },
-  { name = "backend-3", addr = "127.0.0.1:3003", weight = 3, enabled = true }
+  { name = "backend-1", addr = "127.0.0.1:5001", weight = 2, enabled = true },
+  { name = "backend-2", addr = "127.0.0.1:5002", weight = 1, enabled = true },
+  { name = "backend-3", addr = "127.0.0.1:5003", weight = 3, enabled = true }
 ]
 
 [rules]

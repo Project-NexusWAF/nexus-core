@@ -1698,20 +1698,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nexus-demo-backends"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum 0.7.9",
- "clap",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "nexus-gateway"
 version = "0.1.0"
 dependencies = [
