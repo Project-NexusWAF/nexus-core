@@ -1,8 +1,10 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use nexus_anomaly::AnomalyState;
 use nexus_common::{BlockCode, Decision, Layer, RequestContext, Result};
 use nexus_metrics::MetricsRegistry;
+use nexus_telemetry::PolicyTelemetry;
 use tracing::{debug, info, warn};
 
 use crate::run_result::{LayerTiming, RunResult};
@@ -11,18 +13,35 @@ use crate::run_result::{LayerTiming, RunResult};
 pub struct Pipeline {
   layers: Arc<Vec<Layer>>,
   risk_threshold: f32,
+  telemetry: Arc<PolicyTelemetry>,
+  anomaly_state: Arc<AnomalyState>,
 }
 
 impl Pipeline {
-  pub(crate) fn new(layers: Vec<Layer>, risk_threshold: f32) -> Self {
+  pub(crate) fn new(
+    layers: Vec<Layer>,
+    risk_threshold: f32,
+    telemetry: Arc<PolicyTelemetry>,
+    anomaly_state: Arc<AnomalyState>,
+  ) -> Self {
     Self {
       layers: Arc::new(layers),
       risk_threshold,
+      telemetry,
+      anomaly_state,
     }
   }
 
   pub fn layer_names(&self) -> Vec<&'static str> {
     self.layers.iter().map(|layer| layer.name()).collect()
+  }
+
+  pub fn telemetry(&self) -> Arc<PolicyTelemetry> {
+    Arc::clone(&self.telemetry)
+  }
+
+  pub fn anomaly_state(&self) -> Arc<AnomalyState> {
+    Arc::clone(&self.anomaly_state)
   }
 
   pub async fn init(&self) -> Result<()> {
@@ -77,7 +96,8 @@ impl Pipeline {
         break;
       }
 
-      if ctx.risk_score >= self.risk_threshold {
+      let threshold = effective_risk_threshold(self.risk_threshold, ctx);
+      if ctx.risk_score >= threshold {
         final_decision = Decision::block(
           format!("Risk threshold exceeded: {:.2}", ctx.risk_score),
           BlockCode::ProtocolViolation,
@@ -97,6 +117,13 @@ impl Pipeline {
       total_duration.as_secs_f64() * 1_000.0,
     );
 
+    let is_attack = final_decision.is_blocking()
+      || matches!(final_decision, Decision::Log { .. })
+      || !ctx.threat_tags.is_empty();
+    self
+      .telemetry
+      .record_outcome(is_attack, total_duration);
+
     RunResult {
       decision: final_decision,
       timings,
@@ -114,6 +141,15 @@ fn decision_label(decision: &Decision) -> &'static str {
     Decision::Log { .. } => "log",
     Decision::RateLimit { .. } => "rate_limit",
   }
+}
+
+fn effective_risk_threshold(default_threshold: f32, ctx: &RequestContext) -> f32 {
+  ctx
+    .meta
+    .get("risk_threshold")
+    .and_then(|v| v.parse::<f32>().ok())
+    .filter(|v| (0.0..=1.0).contains(v))
+    .unwrap_or(default_threshold)
 }
 
 #[cfg(test)]

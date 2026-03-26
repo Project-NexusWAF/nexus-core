@@ -168,7 +168,15 @@ pub async fn update_rules(
       .context("failed to persist rules to PostgreSQL")?;
   }
 
-  let pipeline = nexus_pipeline::PipelineBuilder::from_config(&cfg);
+  let (telemetry, anomaly_state) = {
+    let current = state.pipeline.read();
+    (current.telemetry(), current.anomaly_state())
+  };
+  let pipeline = nexus_pipeline::PipelineBuilder::from_config_with_state(
+    &cfg,
+    telemetry,
+    anomaly_state,
+  );
   pipeline
     .init()
     .await

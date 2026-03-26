@@ -1,0 +1,18 @@
+[package]
+name = "nexus-anomaly"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+nexus-common = { workspace = true }
+nexus-config = { workspace = true }
+parking_lot = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+bytes = { workspace = true }
+http = { workspace = true }

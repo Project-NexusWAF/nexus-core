@@ -1636,6 +1636,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexus-anomaly"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "http 1.4.0",
+ "nexus-common",
+ "nexus-config",
+ "parking_lot 0.12.5",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "nexus-common"
 version = "0.1.0"
 dependencies = [
@@ -1815,14 +1829,35 @@ dependencies = [
  "async-trait",
  "bytes",
  "http 1.4.0",
+ "nexus-anomaly",
  "nexus-common",
  "nexus-config",
  "nexus-grammar",
  "nexus-lex",
  "nexus-metrics",
  "nexus-ml-client",
+ "nexus-policy",
  "nexus-rate",
  "nexus-rules",
+ "nexus-telemetry",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "nexus-policy"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "http 1.4.0",
+ "nexus-common",
+ "nexus-config",
+ "nexus-telemetry",
+ "parking_lot 0.12.5",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
 ]
@@ -1885,6 +1920,13 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "nexus-telemetry"
+version = "0.1.0"
+dependencies = [
+ "parking_lot 0.12.5",
 ]
 
 [[package]]

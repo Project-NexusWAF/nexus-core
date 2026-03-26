@@ -4,7 +4,7 @@ mod error;
 mod layer;
 mod utils;
 
-pub use context::RequestContext;
+pub use context::{ContentType, RequestContext};
 pub use decision::{BlockCode, Decision};
 pub use error::{NexusError, Result};
 pub use layer::{InnerLayer, Layer};

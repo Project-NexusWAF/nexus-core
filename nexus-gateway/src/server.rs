@@ -35,7 +35,15 @@ pub fn spawn_config_reload_task(state: Arc<AppState>) {
 
       let cfg = rx.borrow().clone();
       state.update_load_balancer(&cfg.lb);
-      let pipeline = PipelineBuilder::from_config(&cfg);
+      let (telemetry, anomaly_state) = {
+        let current = state.control.pipeline.read();
+        (current.telemetry(), current.anomaly_state())
+      };
+      let pipeline = PipelineBuilder::from_config_with_state(
+        &cfg,
+        telemetry,
+        anomaly_state,
+      );
       match pipeline.init().await {
         Ok(()) => {
           *state.control.pipeline.write() = pipeline;

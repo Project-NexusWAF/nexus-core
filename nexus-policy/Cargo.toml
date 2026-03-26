@@ -1,25 +1,21 @@
 [package]
-name = "nexus-pipeline"
+name = "nexus-policy"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
 [dependencies]
+async-trait = { workspace = true }
 nexus-common = { workspace = true }
 nexus-config = { workspace = true }
-nexus-anomaly = { workspace = true }
-nexus-rate = { workspace = true }
-nexus-lex = { workspace = true }
-nexus-grammar = { workspace = true }
-nexus-rules = { workspace = true }
-nexus-ml-client = { workspace = true }
-nexus-policy = { workspace = true }
 nexus-telemetry = { workspace = true }
-nexus-metrics = { workspace = true }
+parking_lot = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-async-trait = { workspace = true }
 
 [dev-dependencies]
 bytes = { workspace = true }

@@ -13,6 +13,10 @@ pub struct Config {
 
   #[serde(default)]
   pub ml: MlConfig,
+  #[serde(default)]
+  pub policy: PolicyConfig,
+  #[serde(default)]
+  pub anomaly: AnomalyConfig,
   pub rules: RulesConfig,
 
   #[serde(default)]
@@ -149,6 +153,88 @@ pub struct MlConfig {
   pub confidence_threshold: f32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyFallbackAction {
+  AllowNoMl,
+  InvokeMl,
+  #[default]
+  Auto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyConfig {
+  #[serde(default = "bool_true")]
+  pub enabled: bool,
+  #[serde(default = "default_policy_endpoint")]
+  pub endpoint: String,
+  #[serde(default = "default_policy_timeout_ms")]
+  pub timeout_ms: u64,
+  #[serde(default)]
+  pub fallback_action: PolicyFallbackAction,
+  #[serde(default = "default_policy_latency_budget_ms")]
+  pub latency_budget_ms: u64,
+  #[serde(default = "default_policy_threshold_step")]
+  pub threshold_step: f32,
+  #[serde(default = "default_policy_rate_limit_seconds")]
+  pub rate_limit_seconds: u32,
+  #[serde(default = "default_policy_attack_rate_threshold")]
+  pub attack_rate_threshold: f32,
+  #[serde(default = "bool_true")]
+  pub allow_rate_limit_action: bool,
+}
+
+impl Default for PolicyConfig {
+  fn default() -> Self {
+    Self {
+      enabled: true,
+      endpoint: default_policy_endpoint(),
+      timeout_ms: default_policy_timeout_ms(),
+      fallback_action: PolicyFallbackAction::default(),
+      latency_budget_ms: default_policy_latency_budget_ms(),
+      threshold_step: default_policy_threshold_step(),
+      rate_limit_seconds: default_policy_rate_limit_seconds(),
+      attack_rate_threshold: default_policy_attack_rate_threshold(),
+      allow_rate_limit_action: true,
+    }
+  }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnomalyConfig {
+  #[serde(default = "bool_true")]
+  pub enabled: bool,
+  #[serde(default = "default_anomaly_window_secs")]
+  pub window_secs: u64,
+  #[serde(default = "default_anomaly_z_threshold")]
+  pub z_score_threshold: f32,
+  #[serde(default = "default_anomaly_min_samples")]
+  pub min_samples: u64,
+  #[serde(default = "default_anomaly_risk_delta")]
+  pub risk_delta: f32,
+  #[serde(default)]
+  pub block_on_anomaly: bool,
+  #[serde(default = "default_anomaly_ewma_alpha")]
+  pub ewma_alpha: f32,
+  #[serde(default = "default_anomaly_cooldown_secs")]
+  pub cooldown_secs: u64,
+}
+
+impl Default for AnomalyConfig {
+  fn default() -> Self {
+    Self {
+      enabled: true,
+      window_secs: default_anomaly_window_secs(),
+      z_score_threshold: default_anomaly_z_threshold(),
+      min_samples: default_anomaly_min_samples(),
+      risk_delta: default_anomaly_risk_delta(),
+      block_on_anomaly: false,
+      ewma_alpha: default_anomaly_ewma_alpha(),
+      cooldown_secs: default_anomaly_cooldown_secs(),
+    }
+  }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RulesConfig {
   pub rules_file: String,
@@ -238,6 +324,62 @@ impl Config {
       });
     }
 
+    if self.policy.timeout_ms == 0 {
+      return Err(NexusError::ConfigValidation {
+        field: "policy.timeout_ms".into(),
+        reason: "must be greater than 0".into(),
+      });
+    }
+    if self.policy.latency_budget_ms == 0 {
+      return Err(NexusError::ConfigValidation {
+        field: "policy.latency_budget_ms".into(),
+        reason: "must be greater than 0".into(),
+      });
+    }
+    if !(0.0..=1.0).contains(&self.policy.threshold_step) {
+      return Err(NexusError::ConfigValidation {
+        field: "policy.threshold_step".into(),
+        reason: "must be between 0.0 and 1.0".into(),
+      });
+    }
+    if !(0.0..=1.0).contains(&self.policy.attack_rate_threshold) {
+      return Err(NexusError::ConfigValidation {
+        field: "policy.attack_rate_threshold".into(),
+        reason: "must be between 0.0 and 1.0".into(),
+      });
+    }
+    if self.policy.rate_limit_seconds == 0 {
+      return Err(NexusError::ConfigValidation {
+        field: "policy.rate_limit_seconds".into(),
+        reason: "must be greater than 0".into(),
+      });
+    }
+
+    if self.anomaly.window_secs == 0 {
+      return Err(NexusError::ConfigValidation {
+        field: "anomaly.window_secs".into(),
+        reason: "must be greater than 0".into(),
+      });
+    }
+    if self.anomaly.z_score_threshold <= 0.0 {
+      return Err(NexusError::ConfigValidation {
+        field: "anomaly.z_score_threshold".into(),
+        reason: "must be greater than 0".into(),
+      });
+    }
+    if self.anomaly.min_samples == 0 {
+      return Err(NexusError::ConfigValidation {
+        field: "anomaly.min_samples".into(),
+        reason: "must be greater than 0".into(),
+      });
+    }
+    if !(0.0..=1.0).contains(&self.anomaly.ewma_alpha) {
+      return Err(NexusError::ConfigValidation {
+        field: "anomaly.ewma_alpha".into(),
+        reason: "must be between 0.0 and 1.0".into(),
+      });
+    }
+
     if self.rate.requests_per_second == 0 {
       return Err(NexusError::ConfigValidation {
         field: "rate.requests_per_second".into(),
@@ -321,6 +463,42 @@ fn default_ml_risk_delta() -> f32 {
 }
 fn default_ml_threshold() -> f32 {
   0.8
+}
+fn default_policy_endpoint() -> String {
+  "http://127.0.0.1:50053".into()
+}
+fn default_policy_timeout_ms() -> u64 {
+  2_000
+}
+fn default_policy_latency_budget_ms() -> u64 {
+  20
+}
+fn default_policy_threshold_step() -> f32 {
+  0.1
+}
+fn default_policy_rate_limit_seconds() -> u32 {
+  30
+}
+fn default_policy_attack_rate_threshold() -> f32 {
+  0.3
+}
+fn default_anomaly_window_secs() -> u64 {
+  10
+}
+fn default_anomaly_z_threshold() -> f32 {
+  3.0
+}
+fn default_anomaly_min_samples() -> u64 {
+  50
+}
+fn default_anomaly_risk_delta() -> f32 {
+  0.2
+}
+fn default_anomaly_ewma_alpha() -> f32 {
+  0.2
+}
+fn default_anomaly_cooldown_secs() -> u64 {
+  30
 }
 fn default_postgres_url() -> String {
   "postgres://nexus:nexus@localhost:5432/nexus_waf".into()

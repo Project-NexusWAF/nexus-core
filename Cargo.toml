@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "nexus-anomaly",
   "nexus-common",
   "nexus-config",
   "nexus-lex",
@@ -7,12 +8,14 @@ members = [
   "nexus-rate",
   "nexus-rules",
   "nexus-ml-client",
+  "nexus-policy",
   "nexus-store",
   "nexus-pipeline",
   "nexus-control",
   "nexus-gateway",
   "nexus-lb",
   "nexus-metrics",
+  "nexus-telemetry",
 ]
 resolver = "2"
 
@@ -36,6 +39,7 @@ http         = "1.1"
 http-body-util = "0.1"
 tower        = { version = "0.4", features = ["full"] }
 tower-http   = { version = "0.5", features = ["trace", "cors", "timeout"] }
+reqwest      = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 # gRPC
 tonic        = "0.11"
 tonic-build  = "0.11"
@@ -77,6 +81,9 @@ nexus-rules   = { path = "nexus-rules" }
 nexus-store   = { path = "nexus-store" }
 nexus-lb      = { path = "nexus-lb" }
 nexus-ml-client = { path = "nexus-ml-client" }
+nexus-anomaly = { path = "nexus-anomaly" }
+nexus-policy = { path = "nexus-policy" }
+nexus-telemetry = { path = "nexus-telemetry" }
 nexus-control = { path = "nexus-control" }
 nexus-pipeline = { path = "nexus-pipeline" }
 nexus-metrics = { path = "nexus-metrics" }

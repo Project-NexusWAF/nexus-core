@@ -95,6 +95,86 @@ impl ConfigLoader {
       }
     }
 
+    if let Ok(v) = std::env::var("NEXUS_POLICY_ENDPOINT") {
+      info!(value = %v, "ENV override: policy.endpoint");
+      config.policy.endpoint = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_POLICY_TIMEOUT_MS") {
+      if let Ok(n) = v.parse() {
+        config.policy.timeout_ms = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_POLICY_ENABLED") {
+      config.policy.enabled = v.to_lowercase() != "false" && v != "0";
+    }
+    if let Ok(v) = std::env::var("NEXUS_POLICY_FALLBACK_ACTION") {
+      config.policy.fallback_action = match v.to_lowercase().as_str() {
+        "allow_no_ml" | "allow" => crate::schema::PolicyFallbackAction::AllowNoMl,
+        "invoke_ml" | "ml" => crate::schema::PolicyFallbackAction::InvokeMl,
+        _ => crate::schema::PolicyFallbackAction::Auto,
+      };
+    }
+    if let Ok(v) = std::env::var("NEXUS_POLICY_LATENCY_BUDGET_MS") {
+      if let Ok(n) = v.parse() {
+        config.policy.latency_budget_ms = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_POLICY_THRESHOLD_STEP") {
+      if let Ok(n) = v.parse() {
+        config.policy.threshold_step = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_POLICY_RATE_LIMIT_SECONDS") {
+      if let Ok(n) = v.parse() {
+        config.policy.rate_limit_seconds = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_POLICY_ATTACK_RATE_THRESHOLD") {
+      if let Ok(n) = v.parse() {
+        config.policy.attack_rate_threshold = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_POLICY_ALLOW_RATE_LIMIT_ACTION") {
+      config.policy.allow_rate_limit_action = v.to_lowercase() != "false" && v != "0";
+    }
+
+    if let Ok(v) = std::env::var("NEXUS_ANOMALY_ENABLED") {
+      config.anomaly.enabled = v.to_lowercase() != "false" && v != "0";
+    }
+    if let Ok(v) = std::env::var("NEXUS_ANOMALY_WINDOW_SECS") {
+      if let Ok(n) = v.parse() {
+        config.anomaly.window_secs = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_ANOMALY_Z_THRESHOLD") {
+      if let Ok(n) = v.parse() {
+        config.anomaly.z_score_threshold = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_ANOMALY_MIN_SAMPLES") {
+      if let Ok(n) = v.parse() {
+        config.anomaly.min_samples = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_ANOMALY_RISK_DELTA") {
+      if let Ok(n) = v.parse() {
+        config.anomaly.risk_delta = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_ANOMALY_BLOCK_ON") {
+      config.anomaly.block_on_anomaly = v.to_lowercase() == "true" || v == "1";
+    }
+    if let Ok(v) = std::env::var("NEXUS_ANOMALY_EWMA_ALPHA") {
+      if let Ok(n) = v.parse() {
+        config.anomaly.ewma_alpha = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_ANOMALY_COOLDOWN_SECS") {
+      if let Ok(n) = v.parse() {
+        config.anomaly.cooldown_secs = n;
+      }
+    }
+
     if let Ok(v) = std::env::var("NEXUS_PIPELINE_ML_ENABLED") {
       config.pipeline.ml_enabled = v.to_lowercase() != "false" && v != "0";
     }
@@ -204,6 +284,11 @@ rules_file = "config/rules.toml"
     assert_eq!(cfg.store.influx_bucket, "waf_metrics");
     assert_eq!(cfg.store.log_batch_size, 100);
     assert_eq!(cfg.store.log_flush_ms, 500);
+    assert_eq!(cfg.policy.endpoint, "http://127.0.0.1:50053");
+    assert!(cfg.policy.enabled);
+    assert!(!cfg.policy.allow_rate_limit_action);
+    assert!(cfg.anomaly.enabled);
+    assert_eq!(cfg.anomaly.window_secs, 10);
   }
 
   #[test]
