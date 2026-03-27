@@ -5,13 +5,13 @@ use axum::{
   http::StatusCode,
   middleware,
   response::IntoResponse,
-  routing::get,
+  routing::{get, post},
   Json, Router,
 };
 use uuid::Uuid;
 
 use crate::ops::{self, LogsQuery};
-use crate::stats::UpdateRulesBody;
+use crate::stats::{SynthesizeRulesBody, UpdateRulesBody};
 use crate::ControlAppState;
 
 pub fn rest_router(state: Arc<ControlAppState>) -> Router {
@@ -25,6 +25,7 @@ pub fn rest_router(state: Arc<ControlAppState>) -> Router {
       "/api/rules",
       get(get_rules_handler).post(update_rules_handler),
     )
+    .route("/api/rules/synthesize", post(synthesize_rules_handler))
     .route("/api/rules/versions", get(rule_versions_handler))
     .route("/api/config", get(config_handler))
     .route("/api/config/logs", get(config_logs_handler))
@@ -115,6 +116,22 @@ async fn rule_versions_handler(State(state): State<Arc<ControlAppState>>) -> imp
       Json(serde_json::to_value(result).unwrap_or_default()),
     ),
     Err(error) => internal_error(error),
+  }
+}
+
+async fn synthesize_rules_handler(
+  State(state): State<Arc<ControlAppState>>,
+  Json(body): Json<SynthesizeRulesBody>,
+) -> impl IntoResponse {
+  match ops::synthesize_rules(&state, body).await {
+    Ok(result) => (
+      StatusCode::OK,
+      Json(serde_json::to_value(result).unwrap_or_default()),
+    ),
+    Err(error) => (
+      StatusCode::BAD_REQUEST,
+      Json(serde_json::json!({ "error": error.to_string() })),
+    ),
   }
 }
 

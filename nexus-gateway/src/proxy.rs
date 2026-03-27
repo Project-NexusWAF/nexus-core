@@ -61,10 +61,19 @@ pub async fn proxy_handler(
       let event = nexus_store::BlockedEvent::from_context(
         &context,
         &result.decision,
-        result.decided_by,
+        result.decided_by.as_deref(),
         result.final_risk_score,
       );
+      state.slack_alerts.record_blocked(event.clone());
       writer.record(event);
+    } else {
+      let event = nexus_store::BlockedEvent::from_context(
+        &context,
+        &result.decision,
+        result.decided_by.as_deref(),
+        result.final_risk_score,
+      );
+      state.slack_alerts.record_blocked(event);
     }
   }
 
@@ -78,7 +87,8 @@ pub async fn proxy_handler(
       state.control.blocked_total.fetch_add(1, Ordering::Relaxed);
     }
 
-    return block_response(result.decision, result.decided_by);
+    let decided_by = result.decided_by.clone();
+    return block_response(result.decision, decided_by.as_deref());
   }
 
   let upstream = match state.select_upstream() {
@@ -161,7 +171,7 @@ pub async fn proxy_handler(
   }
 }
 
-fn block_response(decision: Decision, decided_by: Option<&'static str>) -> Response<Body> {
+fn block_response(decision: Decision, decided_by: Option<&str>) -> Response<Body> {
   let blocked_by = decided_by.unwrap_or("unknown");
   match decision {
     Decision::RateLimit {
@@ -338,7 +348,7 @@ fn log_pipeline_outcome(
     mode = mode,
     request_id = %context.id,
     decision = decision_label(&result.decision),
-    decided_by = result.decided_by.unwrap_or("none"),
+    decided_by = result.decided_by.as_deref().unwrap_or("none"),
     risk_score = result.final_risk_score,
     layers_executed = result.timings.len(),
     total_duration_us = result.total_duration.as_micros(),

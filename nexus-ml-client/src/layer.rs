@@ -51,6 +51,15 @@ impl nexus_common::InnerLayer for MlLayer {
       return Ok(nexus_common::Decision::Allow);
     }
 
+    if ctx
+      .meta
+      .get("skip_ml")
+      .is_some_and(|v| v.eq_ignore_ascii_case("true"))
+    {
+      tracing::debug!(request_id = %ctx.id, "ML layer skipped by policy");
+      return Ok(nexus_common::Decision::Allow);
+    }
+
     let result = self.client.classify(ctx).await;
     MetricsRegistry::record_ml(result.duration.as_secs_f64() * 1_000.0, Some(&result.label));
 

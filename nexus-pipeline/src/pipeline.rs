@@ -1,8 +1,10 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use nexus_anomaly::AnomalyState;
 use nexus_common::{BlockCode, Decision, Layer, RequestContext, Result};
 use nexus_metrics::MetricsRegistry;
+use nexus_telemetry::PolicyTelemetry;
 use tracing::{debug, info, warn};
 
 use crate::run_result::{LayerTiming, RunResult};
@@ -11,18 +13,35 @@ use crate::run_result::{LayerTiming, RunResult};
 pub struct Pipeline {
   layers: Arc<Vec<Layer>>,
   risk_threshold: f32,
+  telemetry: Arc<PolicyTelemetry>,
+  anomaly_state: Arc<AnomalyState>,
 }
 
 impl Pipeline {
-  pub(crate) fn new(layers: Vec<Layer>, risk_threshold: f32) -> Self {
+  pub(crate) fn new(
+    layers: Vec<Layer>,
+    risk_threshold: f32,
+    telemetry: Arc<PolicyTelemetry>,
+    anomaly_state: Arc<AnomalyState>,
+  ) -> Self {
     Self {
       layers: Arc::new(layers),
       risk_threshold,
+      telemetry,
+      anomaly_state,
     }
   }
 
   pub fn layer_names(&self) -> Vec<&'static str> {
     self.layers.iter().map(|layer| layer.name()).collect()
+  }
+
+  pub fn telemetry(&self) -> Arc<PolicyTelemetry> {
+    Arc::clone(&self.telemetry)
+  }
+
+  pub fn anomaly_state(&self) -> Arc<AnomalyState> {
+    Arc::clone(&self.anomaly_state)
   }
 
   pub async fn init(&self) -> Result<()> {
@@ -38,7 +57,7 @@ impl Pipeline {
     let pipeline_start = Instant::now();
     let mut timings = Vec::with_capacity(self.layers.len());
     let mut final_decision = Decision::Allow;
-    let mut decided_by = None;
+    let mut decided_by: Option<String> = None;
 
     for layer in self.layers.iter() {
       let layer_start = Instant::now();
@@ -72,17 +91,24 @@ impl Pipeline {
         if let Decision::Block { code, .. } = &decision {
           MetricsRegistry::record_block(layer.name(), &format!("{code:?}"));
         }
-        decided_by = Some(layer.name());
+        decided_by = Some(layer.name().to_string());
         final_decision = decision;
         break;
       }
 
-      if ctx.risk_score >= self.risk_threshold {
+      let threshold = effective_risk_threshold(self.risk_threshold, ctx);
+      if ctx.risk_score >= threshold {
         final_decision = Decision::block(
           format!("Risk threshold exceeded: {:.2}", ctx.risk_score),
           BlockCode::ProtocolViolation,
         );
-        decided_by = Some(layer.name());
+        decided_by = Some(
+          ctx
+            .meta
+            .get("risk_threshold_source")
+            .cloned()
+            .unwrap_or_else(|| layer.name().to_string()),
+        );
         MetricsRegistry::record_block(layer.name(), "RiskThreshold");
         break;
       }
@@ -96,6 +122,13 @@ impl Pipeline {
       decision_label(&final_decision),
       total_duration.as_secs_f64() * 1_000.0,
     );
+
+    let is_attack = final_decision.is_blocking()
+      || matches!(final_decision, Decision::Log { .. })
+      || !ctx.threat_tags.is_empty();
+    self
+      .telemetry
+      .record_outcome(is_attack, total_duration);
 
     RunResult {
       decision: final_decision,
@@ -114,6 +147,15 @@ fn decision_label(decision: &Decision) -> &'static str {
     Decision::Log { .. } => "log",
     Decision::RateLimit { .. } => "rate_limit",
   }
+}
+
+fn effective_risk_threshold(default_threshold: f32, ctx: &RequestContext) -> f32 {
+  ctx
+    .meta
+    .get("risk_threshold")
+    .and_then(|v| v.parse::<f32>().ok())
+    .filter(|v| (0.0..=1.0).contains(v))
+    .unwrap_or(default_threshold)
 }
 
 #[cfg(test)]
@@ -219,7 +261,7 @@ mod tests {
     let result = pipeline.run(&mut ctx).await;
 
     assert!(result.decision.is_blocking());
-    assert_eq!(result.decided_by, Some("blocker"));
+    assert_eq!(result.decided_by.as_deref(), Some("blocker"));
     assert_eq!(result.timings.len(), 2);
   }
 
@@ -248,9 +290,35 @@ mod tests {
     let result = pipeline.run(&mut ctx).await;
 
     assert!(matches!(result.decision, Decision::Block { .. }));
-    assert_eq!(result.decided_by, Some("risk-b"));
+    assert_eq!(result.decided_by.as_deref(), Some("risk-b"));
     assert_eq!(result.timings.len(), 2);
     assert!(result.final_risk_score >= 0.7);
+  }
+
+  #[tokio::test]
+  async fn threshold_block_uses_policy_source_when_present() {
+    let pipeline = PipelineBuilder::new()
+      .risk_threshold(0.7)
+      .layer(Box::new(TestLayer::new(
+        "pre-policy",
+        10,
+        TestBehavior::AddRisk(0.4),
+      )))
+      .layer(Box::new(TestLayer::new(
+        "post-policy",
+        20,
+        TestBehavior::AddRisk(0.4),
+      )))
+      .build();
+
+    let mut ctx = make_ctx();
+    ctx
+      .meta
+      .insert("risk_threshold_source".into(), "policy".into());
+    let result = pipeline.run(&mut ctx).await;
+
+    assert!(matches!(result.decision, Decision::Block { .. }));
+    assert_eq!(result.decided_by.as_deref(), Some("policy"));
   }
 
   #[tokio::test]

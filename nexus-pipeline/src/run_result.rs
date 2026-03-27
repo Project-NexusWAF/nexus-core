@@ -14,7 +14,7 @@ pub struct RunResult {
   pub decision: Decision,
   pub timings: Vec<LayerTiming>,
   pub total_duration: Duration,
-  pub decided_by: Option<&'static str>,
+  pub decided_by: Option<String>,
   pub final_risk_score: f32,
 }
 

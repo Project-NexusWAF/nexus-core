@@ -78,6 +78,7 @@ impl InnerLayer for GrammarLayer {
       return Ok(Decision::Allow);
     }
 
+    let mut grammar_risk = 0.0f32;
     for finding in &findings {
       warn!(
         request_id = %ctx.id,
@@ -87,7 +88,15 @@ impl InnerLayer for GrammarLayer {
         "Grammar threat detected"
       );
       ctx.tag(finding.finding.as_tag(), self.name());
-      ctx.add_risk(finding.finding.risk_delta());
+      let delta = finding.finding.risk_delta();
+      ctx.add_risk(delta);
+      grammar_risk += delta;
+    }
+
+    if grammar_risk > 0.0 {
+      ctx
+        .meta
+        .insert("grammar_risk".into(), format!("{:.3}", grammar_risk));
     }
 
     if self.block_on_match {

@@ -99,3 +99,31 @@ pub struct UpdateRulesBody {
   pub version: String,
   pub content: String,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SynthesizeRulesBody {
+  pub lookback_hours: Option<i64>,
+  pub min_hits: Option<i64>,
+  pub max_rules: Option<usize>,
+  #[serde(default)]
+  pub apply: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GpsCandidateView {
+  pub id: String,
+  pub name: String,
+  pub description: String,
+  pub kind: String,
+  pub signal: String,
+  pub malicious_hits: i64,
+  pub benign_hits: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SynthesizeRulesResponse {
+  pub version: String,
+  pub applied: bool,
+  pub candidates: Vec<GpsCandidateView>,
+  pub content: String,
+}

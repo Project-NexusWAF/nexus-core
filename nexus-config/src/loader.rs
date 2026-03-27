@@ -63,6 +63,55 @@ impl ConfigLoader {
     if let Ok(v) = std::env::var("NEXUS_GATEWAY_AUTH_TOKEN") {
       config.gateway.auth_token = if v.trim().is_empty() { None } else { Some(v) };
     }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_ENABLED") {
+      config.gateway.tls.enabled = v.to_lowercase() == "true" || v == "1";
+    }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_CERT_PATH") {
+      config.gateway.tls.cert_path = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_KEY_PATH") {
+      config.gateway.tls.key_path = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_CERTBOT_ENABLED") {
+      config.gateway.tls.certbot.enabled = v.to_lowercase() == "true" || v == "1";
+    }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_CERTBOT_BIN") {
+      config.gateway.tls.certbot.certbot_bin = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_CERTBOT_LIVE_DIR") {
+      config.gateway.tls.certbot.live_dir = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_CERTBOT_CERT_NAME") {
+      config.gateway.tls.certbot.cert_name = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_CERTBOT_DOMAIN") {
+      config.gateway.tls.certbot.domain = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_CERTBOT_EXTRA_DOMAINS") {
+      config.gateway.tls.certbot.extra_domains = v
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect();
+    }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_CERTBOT_EMAIL") {
+      config.gateway.tls.certbot.email = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_CERTBOT_WEBROOT_DIR") {
+      config.gateway.tls.certbot.webroot_dir = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_CERTBOT_CHALLENGE_ADDR") {
+      config.gateway.tls.certbot.challenge_addr = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_CERTBOT_RENEW_INTERVAL_HOURS") {
+      if let Ok(n) = v.parse() {
+        config.gateway.tls.certbot.renew_interval_hours = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_CERTBOT_STAGING") {
+      config.gateway.tls.certbot.staging = v.to_lowercase() == "true" || v == "1";
+    }
     if let Ok(v) = std::env::var("NEXUS_GATEWAY_MAX_BODY_BYTES") {
       if let Ok(n) = v.parse() {
         config.gateway.max_body_bytes = n;
@@ -93,6 +142,130 @@ impl ConfigLoader {
       if let Ok(n) = v.parse() {
         config.ml.timeout_ms = n;
       }
+    }
+
+    if let Ok(v) = std::env::var("NEXUS_POLICY_ENDPOINT") {
+      info!(value = %v, "ENV override: policy.endpoint");
+      config.policy.endpoint = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_POLICY_TIMEOUT_MS") {
+      if let Ok(n) = v.parse() {
+        config.policy.timeout_ms = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_POLICY_ENABLED") {
+      config.policy.enabled = v.to_lowercase() != "false" && v != "0";
+    }
+    if let Ok(v) = std::env::var("NEXUS_POLICY_FALLBACK_ACTION") {
+      config.policy.fallback_action = match v.to_lowercase().as_str() {
+        "allow_no_ml" | "allow" => crate::schema::PolicyFallbackAction::AllowNoMl,
+        "invoke_ml" | "ml" => crate::schema::PolicyFallbackAction::InvokeMl,
+        _ => crate::schema::PolicyFallbackAction::Auto,
+      };
+    }
+    if let Ok(v) = std::env::var("NEXUS_POLICY_LATENCY_BUDGET_MS") {
+      if let Ok(n) = v.parse() {
+        config.policy.latency_budget_ms = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_POLICY_THRESHOLD_STEP") {
+      if let Ok(n) = v.parse() {
+        config.policy.threshold_step = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_POLICY_RATE_LIMIT_SECONDS") {
+      if let Ok(n) = v.parse() {
+        config.policy.rate_limit_seconds = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_POLICY_ATTACK_RATE_THRESHOLD") {
+      if let Ok(n) = v.parse() {
+        config.policy.attack_rate_threshold = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_POLICY_ALLOW_RATE_LIMIT_ACTION") {
+      config.policy.allow_rate_limit_action = v.to_lowercase() != "false" && v != "0";
+    }
+
+    if let Ok(v) = std::env::var("NEXUS_ANOMALY_ENABLED") {
+      config.anomaly.enabled = v.to_lowercase() != "false" && v != "0";
+    }
+    if let Ok(v) = std::env::var("NEXUS_ANOMALY_WINDOW_SECS") {
+      if let Ok(n) = v.parse() {
+        config.anomaly.window_secs = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_ANOMALY_Z_THRESHOLD") {
+      if let Ok(n) = v.parse() {
+        config.anomaly.z_score_threshold = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_ANOMALY_MIN_SAMPLES") {
+      if let Ok(n) = v.parse() {
+        config.anomaly.min_samples = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_ANOMALY_RISK_DELTA") {
+      if let Ok(n) = v.parse() {
+        config.anomaly.risk_delta = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_ANOMALY_BLOCK_ON") {
+      config.anomaly.block_on_anomaly = v.to_lowercase() == "true" || v == "1";
+    }
+    if let Ok(v) = std::env::var("NEXUS_ANOMALY_EWMA_ALPHA") {
+      if let Ok(n) = v.parse() {
+        config.anomaly.ewma_alpha = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_ANOMALY_COOLDOWN_SECS") {
+      if let Ok(n) = v.parse() {
+        config.anomaly.cooldown_secs = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_GPS_ENABLED") {
+      config.gps.enabled = v.to_lowercase() != "false" && v != "0";
+    }
+    if let Ok(v) = std::env::var("NEXUS_GPS_LOOKBACK_HOURS") {
+      if let Ok(n) = v.parse() {
+        config.gps.default_lookback_hours = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_GPS_MIN_HITS") {
+      if let Ok(n) = v.parse() {
+        config.gps.min_hits = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_GPS_MAX_RULES") {
+      if let Ok(n) = v.parse() {
+        config.gps.max_rules = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_SLACK_ENABLED") {
+      config.slack.enabled = v.to_lowercase() == "true" || v == "1";
+    }
+    if let Ok(v) = std::env::var("NEXUS_SLACK_WEBHOOK_URL") {
+      config.slack.webhook_url = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_SLACK_CHANNEL") {
+      config.slack.channel = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_SLACK_USERNAME") {
+      config.slack.username = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_SLACK_ICON_EMOJI") {
+      config.slack.icon_emoji = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_SLACK_MIN_SEVERITY") {
+      config.slack.min_severity = match v.to_lowercase().as_str() {
+        "low" => crate::schema::SlackSeverity::Low,
+        "high" => crate::schema::SlackSeverity::High,
+        "critical" => crate::schema::SlackSeverity::Critical,
+        _ => crate::schema::SlackSeverity::Medium,
+      };
+    }
+    if let Ok(v) = std::env::var("NEXUS_SLACK_INCLUDE_RATE_LIMITS") {
+      config.slack.include_rate_limits = v.to_lowercase() != "false" && v != "0";
     }
 
     if let Ok(v) = std::env::var("NEXUS_PIPELINE_ML_ENABLED") {
@@ -204,6 +377,16 @@ rules_file = "config/rules.toml"
     assert_eq!(cfg.store.influx_bucket, "waf_metrics");
     assert_eq!(cfg.store.log_batch_size, 100);
     assert_eq!(cfg.store.log_flush_ms, 500);
+    assert_eq!(cfg.policy.endpoint, "http://127.0.0.1:50053");
+    assert!(cfg.policy.enabled);
+    assert!(!cfg.policy.allow_rate_limit_action);
+    assert!(cfg.anomaly.enabled);
+    assert_eq!(cfg.anomaly.window_secs, 10);
+    assert!(cfg.gps.enabled);
+    assert_eq!(cfg.gps.default_lookback_hours, 24);
+    assert!(!cfg.slack.enabled);
+    assert!(!cfg.gateway.tls.enabled);
+    assert!(!cfg.gateway.tls.certbot.enabled);
   }
 
   #[test]
@@ -252,5 +435,31 @@ rules_file = "config/rules.toml"
     std::env::remove_var("NEXUS_GATEWAY_REST_ADDR");
     std::env::remove_var("NEXUS_GATEWAY_PID_FILE");
     std::env::remove_var("NEXUS_GATEWAY_AUTH_TOKEN");
+  }
+
+  #[test]
+  fn env_overrides_certbot_fields() {
+    let _guard = env_lock();
+    std::env::set_var("NEXUS_GATEWAY_TLS_ENABLED", "true");
+    std::env::set_var("NEXUS_GATEWAY_TLS_CERTBOT_ENABLED", "true");
+    std::env::set_var("NEXUS_GATEWAY_TLS_CERTBOT_DOMAIN", "waf.example.com");
+    std::env::set_var("NEXUS_GATEWAY_TLS_CERTBOT_EMAIL", "ops@example.com");
+    std::env::set_var("NEXUS_GATEWAY_TLS_CERTBOT_EXTRA_DOMAINS", "api.example.com, www.example.com");
+
+    let cfg = ConfigLoader::from_str(MINIMAL_CONFIG).expect("config should parse");
+    assert!(cfg.gateway.tls.enabled);
+    assert!(cfg.gateway.tls.certbot.enabled);
+    assert_eq!(cfg.gateway.tls.certbot.domain, "waf.example.com");
+    assert_eq!(cfg.gateway.tls.certbot.email, "ops@example.com");
+    assert_eq!(
+      cfg.gateway.tls.certbot.extra_domains,
+      vec!["api.example.com".to_string(), "www.example.com".to_string()]
+    );
+
+    std::env::remove_var("NEXUS_GATEWAY_TLS_ENABLED");
+    std::env::remove_var("NEXUS_GATEWAY_TLS_CERTBOT_ENABLED");
+    std::env::remove_var("NEXUS_GATEWAY_TLS_CERTBOT_DOMAIN");
+    std::env::remove_var("NEXUS_GATEWAY_TLS_CERTBOT_EMAIL");
+    std::env::remove_var("NEXUS_GATEWAY_TLS_CERTBOT_EXTRA_DOMAINS");
   }
 }

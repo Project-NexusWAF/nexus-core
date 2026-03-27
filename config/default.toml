@@ -10,10 +10,29 @@ trust_x_forwarded_for = true
 # pid_file = "/tmp/nexus-gateway.pid"  # optional: defaults to OS temp dir
 auth_token = "70e9afc94640ba77445fa6643b2af8f6da6ed2b38fd12681ac0d3a2ab37d490a"             # optional: or set NEXUS_ADMIN_TOKEN env
 
+[gateway.tls]
+enabled = false
+cert_path = ""
+key_path = ""
+
+[gateway.tls.certbot]
+enabled = false
+certbot_bin = "certbot"
+live_dir = "/etc/letsencrypt/live"
+cert_name = ""
+domain = ""
+extra_domains = []
+email = ""
+webroot_dir = "/var/lib/nexus-waf/certbot"
+challenge_addr = "0.0.0.0:80"
+renew_interval_hours = 12
+staging = false
+
 [pipeline]
 risk_threshold = 0.7
 ml_enabled = true
 short_circuit = true
+
 
 [rate]
 enabled = true
@@ -47,10 +66,46 @@ rules_file = "config/rules.toml"
 fail_closed = true
 
 [ml]
-endpoint = "http://127.0.0.1:50051"
+endpoint = "http://127.0.0.1:50053"
 timeout_ms = 10000
 risk_delta = 0.6
 confidence_threshold = 0.8
+
+[policy]
+enabled = true
+endpoint = "http://127.0.0.1:50053"
+timeout_ms = 2000
+fallback_action = "auto"
+latency_budget_ms = 20
+threshold_step = 0.1
+rate_limit_seconds = 30
+attack_rate_threshold = 0.3
+allow_rate_limit_action = false
+
+[anomaly]
+enabled = true
+window_secs = 10
+z_score_threshold = 3.0
+min_samples = 50
+risk_delta = 0.2
+block_on_anomaly = false
+ewma_alpha = 0.2
+cooldown_secs = 30
+
+[gps]
+enabled = true
+default_lookback_hours = 24
+min_hits = 3
+max_rules = 8
+
+[slack]
+enabled = true
+webhook_url = "https://hooks.slack.com/services/XXXXXXXXXXXXXXXXXXXXXXX/XXXXXXXXXXXXXXXXXXXXXXXX"
+channel = "all-nexus-waf"
+username = "NexusWAF"
+icon_emoji = ":shield:"
+min_severity = "medium"
+include_rate_limits = false
 
 [store]
 postgres_url = "postgres://postgres:postgres@localhost:5432/nexus_waf"
