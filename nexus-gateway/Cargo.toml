@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = { workspace = true }
 axum = { workspace = true }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
 bytes = { workspace = true }
 chrono = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }

@@ -8,6 +8,7 @@ use axum::{
   Router,
 };
 use chrono::Utc;
+use nexus_config::SlackSeverity;
 use nexus_control::proto::control_plane_server::ControlPlaneServer;
 use nexus_control::server::ControlServer;
 use nexus_control::stats::ConfigLogEntry;
@@ -49,6 +50,11 @@ pub fn spawn_config_reload_task(state: Arc<AppState>) {
           *state.control.pipeline.write() = pipeline;
           let version = state.control.config_version.fetch_add(1, Ordering::SeqCst) + 1;
           tracing::info!(config_version = version, "live config applied to pipeline");
+          state.slack_alerts.notify_system(
+            "Config Reload Applied",
+            format!("Live configuration reloaded successfully. Version {version}."),
+            SlackSeverity::Low,
+          );
           push_config_log(
             &state,
             ConfigLogEntry {
@@ -62,6 +68,11 @@ pub fn spawn_config_reload_task(state: Arc<AppState>) {
         Err(error) => {
           tracing::error!(error = %error, "failed to apply live config update; keeping current pipeline");
           let version = state.control.config_version.load(Ordering::Relaxed);
+          state.slack_alerts.notify_system(
+            "Config Reload Failed",
+            format!("Live configuration reload failed: {error}"),
+            SlackSeverity::High,
+          );
           push_config_log(
             &state,
             ConfigLogEntry {
@@ -87,21 +98,35 @@ fn push_config_log(state: &Arc<AppState>, entry: ConfigLogEntry) {
   }
 }
 
-pub async fn run_gateway(addr: String, state: Arc<AppState>) -> anyhow::Result<()> {
-  let listener = tokio::net::TcpListener::bind(&addr)
-    .await
-    .with_context(|| format!("failed to bind gateway listener on {addr}"))?;
-  tracing::info!(addr = %addr, "HTTP proxy listening");
-
+pub async fn run_gateway(
+  addr: String,
+  state: Arc<AppState>,
+  tls: Option<axum_server::tls_rustls::RustlsConfig>,
+) -> anyhow::Result<()> {
   let router = Router::new()
     .fallback(any(proxy::proxy_handler))
     .with_state(state);
-  axum::serve(
-    listener,
-    router.into_make_service_with_connect_info::<SocketAddr>(),
-  )
-  .await
-  .context("gateway server failed")
+  let service = router.into_make_service_with_connect_info::<SocketAddr>();
+
+  if let Some(tls) = tls {
+    tracing::info!(addr = %addr, "HTTPS proxy listening with TLS termination");
+    axum_server::bind_rustls(
+      addr.parse()
+        .with_context(|| format!("invalid gateway listen addr: {addr}"))?,
+      tls,
+    )
+    .serve(service)
+    .await
+    .context("gateway TLS server failed")
+  } else {
+    let listener = tokio::net::TcpListener::bind(&addr)
+      .await
+      .with_context(|| format!("failed to bind gateway listener on {addr}"))?;
+    tracing::info!(addr = %addr, "HTTP proxy listening");
+    axum::serve(listener, service)
+      .await
+      .context("gateway server failed")
+  }
 }
 
 pub async fn run_grpc(addr: String, state: Arc<AppState>) -> anyhow::Result<()> {

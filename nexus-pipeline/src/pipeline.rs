@@ -57,7 +57,7 @@ impl Pipeline {
     let pipeline_start = Instant::now();
     let mut timings = Vec::with_capacity(self.layers.len());
     let mut final_decision = Decision::Allow;
-    let mut decided_by = None;
+    let mut decided_by: Option<String> = None;
 
     for layer in self.layers.iter() {
       let layer_start = Instant::now();
@@ -91,7 +91,7 @@ impl Pipeline {
         if let Decision::Block { code, .. } = &decision {
           MetricsRegistry::record_block(layer.name(), &format!("{code:?}"));
         }
-        decided_by = Some(layer.name());
+        decided_by = Some(layer.name().to_string());
         final_decision = decision;
         break;
       }
@@ -102,7 +102,13 @@ impl Pipeline {
           format!("Risk threshold exceeded: {:.2}", ctx.risk_score),
           BlockCode::ProtocolViolation,
         );
-        decided_by = Some(layer.name());
+        decided_by = Some(
+          ctx
+            .meta
+            .get("risk_threshold_source")
+            .cloned()
+            .unwrap_or_else(|| layer.name().to_string()),
+        );
         MetricsRegistry::record_block(layer.name(), "RiskThreshold");
         break;
       }
@@ -255,7 +261,7 @@ mod tests {
     let result = pipeline.run(&mut ctx).await;
 
     assert!(result.decision.is_blocking());
-    assert_eq!(result.decided_by, Some("blocker"));
+    assert_eq!(result.decided_by.as_deref(), Some("blocker"));
     assert_eq!(result.timings.len(), 2);
   }
 
@@ -284,9 +290,35 @@ mod tests {
     let result = pipeline.run(&mut ctx).await;
 
     assert!(matches!(result.decision, Decision::Block { .. }));
-    assert_eq!(result.decided_by, Some("risk-b"));
+    assert_eq!(result.decided_by.as_deref(), Some("risk-b"));
     assert_eq!(result.timings.len(), 2);
     assert!(result.final_risk_score >= 0.7);
+  }
+
+  #[tokio::test]
+  async fn threshold_block_uses_policy_source_when_present() {
+    let pipeline = PipelineBuilder::new()
+      .risk_threshold(0.7)
+      .layer(Box::new(TestLayer::new(
+        "pre-policy",
+        10,
+        TestBehavior::AddRisk(0.4),
+      )))
+      .layer(Box::new(TestLayer::new(
+        "post-policy",
+        20,
+        TestBehavior::AddRisk(0.4),
+      )))
+      .build();
+
+    let mut ctx = make_ctx();
+    ctx
+      .meta
+      .insert("risk_threshold_source".into(), "policy".into());
+    let result = pipeline.run(&mut ctx).await;
+
+    assert!(matches!(result.decision, Decision::Block { .. }));
+    assert_eq!(result.decided_by.as_deref(), Some("policy"));
   }
 
   #[tokio::test]

@@ -1,16 +1,18 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use anyhow::{bail, Context};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use nexus_lb::UpstreamStatus;
+use nexus_rules::{Condition, Rule, RuleAction, RuleSet};
 use sqlx::{Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use crate::stats::{
   AttackLogEntry, ConfigLogEntry, ConfigSnapshot, HealthSnapshot, PaginatedLogs, RuleVersionView,
-  RulesPayload, StatsSnapshot, UpstreamStatusView,
+  RulesPayload, StatsSnapshot, UpstreamStatusView, GpsCandidateView, SynthesizeRulesBody,
+  SynthesizeRulesResponse,
 };
 use crate::ControlAppState;
 
@@ -129,6 +131,68 @@ pub async fn update_rules(
   version: &str,
   content: &str,
 ) -> anyhow::Result<u64> {
+  let parsed = validate_rules_content(version, content)?;
+  apply_rules_content(state, parsed, content).await
+}
+
+pub async fn synthesize_rules(
+  state: &Arc<ControlAppState>,
+  body: SynthesizeRulesBody,
+) -> anyhow::Result<SynthesizeRulesResponse> {
+  let cfg = state.live_config.borrow().clone();
+  if !cfg.gps.enabled {
+    bail!("GPS synthesis is disabled in config");
+  }
+
+  let Some(store) = &state.store else {
+    bail!("GPS synthesis requires PostgreSQL-backed attack logs");
+  };
+
+  let lookback_hours = body
+    .lookback_hours
+    .unwrap_or(cfg.gps.default_lookback_hours)
+    .max(1);
+  let min_hits = body.min_hits.unwrap_or(cfg.gps.min_hits).max(1);
+  let max_rules = body.max_rules.unwrap_or(cfg.gps.max_rules).max(1);
+  let cutoff = Utc::now() - Duration::hours(lookback_hours);
+
+  let rows = sqlx::query_as::<_, AttackLogEntry>(
+    "SELECT id, timestamp, client_ip::text AS client_ip, uri, method, risk_score, decision, \
+     threat_tags, blocked_by, ml_score, ml_label, block_code \
+     FROM attack_logs WHERE timestamp >= $1 ORDER BY timestamp DESC",
+  )
+  .bind(cutoff)
+  .fetch_all(&store.pg)
+  .await
+  .context("failed to load attack logs for GPS synthesis")?;
+
+  if rows.is_empty() {
+    bail!("no attack logs available in the requested lookback window");
+  }
+
+  let current_rules = load_current_rules(state).await?;
+  let candidates = build_gps_candidates(&rows, min_hits, max_rules);
+  if candidates.is_empty() {
+    bail!("no validated candidate rules were synthesized from recent logs");
+  }
+
+  let next_version = format!("gps-{}", Utc::now().format("%Y%m%d%H%M%S"));
+  let synthesized = append_candidates_to_rules(&current_rules, &next_version, &candidates);
+  let content = toml::to_string_pretty(&synthesized).context("failed to serialize GPS rules")?;
+
+  if body.apply {
+    let _ = apply_rules_content(state, synthesized.clone(), &content).await?;
+  }
+
+  Ok(SynthesizeRulesResponse {
+    version: next_version,
+    applied: body.apply,
+    candidates: candidates.into_iter().map(Into::into).collect(),
+    content,
+  })
+}
+
+fn validate_rules_content(version: &str, content: &str) -> anyhow::Result<RuleSet> {
   if version.trim().is_empty() {
     bail!("rule version must not be empty");
   }
@@ -136,7 +200,7 @@ pub async fn update_rules(
     bail!("rule content must not be empty");
   }
 
-  let parsed: nexus_rules::RuleSet =
+  let parsed: RuleSet =
     toml::from_str(content).context("rules content is not valid rules TOML")?;
   if parsed.version.trim().is_empty() {
     bail!("rules TOML must contain a non-empty version");
@@ -149,6 +213,14 @@ pub async fn update_rules(
     );
   }
 
+  Ok(parsed)
+}
+
+async fn apply_rules_content(
+  state: &Arc<ControlAppState>,
+  parsed: RuleSet,
+  content: &str,
+) -> anyhow::Result<u64> {
   let cfg = state.live_config.borrow().clone();
   let rules_path = std::path::PathBuf::from(&cfg.rules.rules_file);
   if let Some(parent) = rules_path.parent() {
@@ -163,7 +235,7 @@ pub async fn update_rules(
   if let Some(store) = &state.store {
     store
       .rules()
-      .save(version, content)
+      .save(&parsed.version, content)
       .await
       .context("failed to persist rules to PostgreSQL")?;
   }
@@ -304,6 +376,220 @@ fn extract_rules_version(content: &str) -> String {
     .unwrap_or_else(|| "unknown".to_string())
 }
 
+async fn load_current_rules(state: &Arc<ControlAppState>) -> anyhow::Result<RuleSet> {
+  let payload = get_rules(state).await?;
+  if !payload.found || payload.content.trim().is_empty() {
+    return Ok(RuleSet {
+      version: "1.0.0".to_string(),
+      rules: Vec::new(),
+    });
+  }
+
+  toml::from_str::<RuleSet>(&payload.content)
+    .context("failed to parse current rules before GPS synthesis")
+}
+
+#[derive(Debug, Clone)]
+struct GpsCandidate {
+  id: String,
+  name: String,
+  description: String,
+  kind: String,
+  signal: String,
+  malicious_hits: i64,
+  benign_hits: i64,
+  rule: Rule,
+}
+
+impl From<GpsCandidate> for GpsCandidateView {
+  fn from(value: GpsCandidate) -> Self {
+    Self {
+      id: value.id,
+      name: value.name,
+      description: value.description,
+      kind: value.kind,
+      signal: value.signal,
+      malicious_hits: value.malicious_hits,
+      benign_hits: value.benign_hits,
+    }
+  }
+}
+
+fn build_gps_candidates(
+  rows: &[AttackLogEntry],
+  min_hits: i64,
+  max_rules: usize,
+) -> Vec<GpsCandidate> {
+  let malicious: Vec<&AttackLogEntry> = rows
+    .iter()
+    .filter(|row| row.decision != "Allow" || !row.threat_tags.is_empty())
+    .collect();
+  let benign: Vec<&AttackLogEntry> = rows
+    .iter()
+    .filter(|row| row.decision == "Allow" && row.threat_tags.is_empty())
+    .collect();
+
+  let mut candidates = Vec::new();
+
+  for (signal, regex) in signal_catalog() {
+    let malicious_hits = malicious
+      .iter()
+      .filter(|row| row.uri.to_ascii_lowercase().contains(signal))
+      .count() as i64;
+    let benign_hits = benign
+      .iter()
+      .filter(|row| row.uri.to_ascii_lowercase().contains(signal))
+      .count() as i64;
+
+    if malicious_hits < min_hits || benign_hits > 0 {
+      continue;
+    }
+
+    let id = format!("GPS_REGEX_{}", candidates.len() + 1);
+    let name = format!("Block synthesized {signal} probes");
+    let description = format!(
+      "Synthesized from {malicious_hits} recent malicious requests and validated against benign request URIs."
+    );
+    candidates.push(GpsCandidate {
+      id: id.clone(),
+      name: name.clone(),
+      description: description.clone(),
+      kind: "regex_match".to_string(),
+      signal: signal.to_string(),
+      malicious_hits,
+      benign_hits,
+      rule: Rule {
+        id,
+        name,
+        enabled: true,
+        priority: 35,
+        action: RuleAction::Block,
+        description,
+        condition: Condition::RegexMatch {
+          target: "uri".to_string(),
+          pattern: regex.to_string(),
+        },
+      },
+    });
+  }
+
+  let suspicious_prefixes = malicious_path_prefixes(&rows);
+  for prefix in suspicious_prefixes {
+    let malicious_hits = rows
+      .iter()
+      .filter(|row| row.uri_path().starts_with(&prefix) && row.decision != "Allow")
+      .count() as i64;
+    let benign_hits = rows
+      .iter()
+      .filter(|row| row.uri_path().starts_with(&prefix) && row.decision == "Allow")
+      .count() as i64;
+
+    if malicious_hits < min_hits || benign_hits > 0 {
+      continue;
+    }
+
+    let id = format!("GPS_PATH_{}", candidates.len() + 1);
+    let name = format!("Block synthesized path prefix {prefix}");
+    let description = format!(
+      "Synthesized from {malicious_hits} recent malicious requests hitting {prefix} with no benign matches."
+    );
+    candidates.push(GpsCandidate {
+      id: id.clone(),
+      name: name.clone(),
+      description: description.clone(),
+      kind: "path_prefix".to_string(),
+      signal: prefix.clone(),
+      malicious_hits,
+      benign_hits,
+      rule: Rule {
+        id,
+        name,
+        enabled: true,
+        priority: 30,
+        action: RuleAction::Block,
+        description,
+        condition: Condition::PathPrefix { value: prefix },
+      },
+    });
+  }
+
+  candidates.sort_by(|a, b| {
+    b.malicious_hits
+      .cmp(&a.malicious_hits)
+      .then(a.benign_hits.cmp(&b.benign_hits))
+  });
+  candidates.truncate(max_rules);
+  candidates
+}
+
+fn append_candidates_to_rules(
+  current_rules: &RuleSet,
+  version: &str,
+  candidates: &[GpsCandidate],
+) -> RuleSet {
+  let existing_ids: BTreeSet<&str> = current_rules.rules.iter().map(|rule| rule.id.as_str()).collect();
+  let mut rules = current_rules.rules.clone();
+  for candidate in candidates {
+    if !existing_ids.contains(candidate.rule.id.as_str()) {
+      rules.push(candidate.rule.clone());
+    }
+  }
+  rules.sort_by_key(|rule| rule.priority);
+  RuleSet {
+    version: version.to_string(),
+    rules,
+  }
+}
+
+fn signal_catalog() -> &'static [(&'static str, &'static str)] {
+  &[
+    ("union select", "(?i)\\bunion\\b.{0,30}\\bselect\\b"),
+    ("<script", "(?i)<\\s*script\\b"),
+    ("javascript:", "(?i)javascript\\s*:"),
+    ("../", "(\\.\\./|\\.\\.\\\\)"),
+    ("%2e%2e", "(?i)(%2e%2e|%252e%252e)(%2f|%5c|/|\\\\)"),
+    ("/etc/passwd", "(?i)/etc/passwd"),
+    ("xp_cmdshell", "(?i)\\bxp_cmdshell\\b"),
+    ("waitfor delay", "(?i)waitfor\\s+delay"),
+    ("pg_sleep", "(?i)\\bpg_sleep\\s*\\("),
+    ("${jndi:", "\\$\\{jndi:"),
+  ]
+}
+
+fn malicious_path_prefixes(rows: &[AttackLogEntry]) -> Vec<String> {
+  let mut prefixes = BTreeSet::new();
+  for row in rows {
+    let path = row.uri_path();
+    if matches!(path.as_str(), "/admin" | "/wp-admin" | "/phpmyadmin" | "/.env" | "/cgi-bin") {
+      prefixes.insert(path);
+    }
+  }
+  prefixes.into_iter().collect()
+}
+
+trait AttackLogExt {
+  fn uri_path(&self) -> String;
+}
+
+impl AttackLogExt for AttackLogEntry {
+  fn uri_path(&self) -> String {
+    let after_scheme = self
+      .uri
+      .split_once("://")
+      .map(|(_, rest)| rest)
+      .unwrap_or(self.uri.as_str());
+    let path_with_query = after_scheme
+      .split_once('/')
+      .map(|(_, tail)| format!("/{tail}"))
+      .unwrap_or_else(|| "/".to_string());
+    path_with_query
+      .split('?')
+      .next()
+      .unwrap_or("/")
+      .to_string()
+  }
+}
+
 fn parse_timestamp(value: Option<&str>) -> anyhow::Result<Option<DateTime<Utc>>> {
   let Some(raw) = value else {
     return Ok(None);
@@ -327,6 +613,9 @@ fn sanitize_config(cfg: &nexus_config::Config) -> nexus_config::Config {
 
   if !cfg.store.influx_token.trim().is_empty() {
     cfg.store.influx_token = "redacted".to_string();
+  }
+  if !cfg.slack.webhook_url.trim().is_empty() {
+    cfg.slack.webhook_url = "redacted".to_string();
   }
 
   cfg.store.postgres_url = redact_url(&cfg.store.postgres_url);

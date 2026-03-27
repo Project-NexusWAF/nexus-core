@@ -1,7 +1,9 @@
+mod alerting;
 mod commands;
 mod proxy;
 mod server;
 mod state;
+mod tls;
 
 use clap::{Parser, Subcommand};
 

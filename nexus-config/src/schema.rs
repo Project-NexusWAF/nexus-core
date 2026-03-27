@@ -17,6 +17,10 @@ pub struct Config {
   pub policy: PolicyConfig,
   #[serde(default)]
   pub anomaly: AnomalyConfig,
+  #[serde(default)]
+  pub gps: GpsConfig,
+  #[serde(default)]
+  pub slack: SlackConfig,
   pub rules: RulesConfig,
 
   #[serde(default)]
@@ -46,6 +50,76 @@ pub struct GatewayConfig {
 
   #[serde(default = "bool_true")]
   pub trust_x_forwarded_for: bool,
+
+  #[serde(default)]
+  pub tls: TlsConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TlsConfig {
+  #[serde(default)]
+  pub enabled: bool,
+  #[serde(default)]
+  pub cert_path: String,
+  #[serde(default)]
+  pub key_path: String,
+  #[serde(default)]
+  pub certbot: CertbotConfig,
+}
+
+impl Default for TlsConfig {
+  fn default() -> Self {
+    Self {
+      enabled: false,
+      cert_path: String::new(),
+      key_path: String::new(),
+      certbot: CertbotConfig::default(),
+    }
+  }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CertbotConfig {
+  #[serde(default)]
+  pub enabled: bool,
+  #[serde(default = "default_certbot_bin")]
+  pub certbot_bin: String,
+  #[serde(default = "default_certbot_live_dir")]
+  pub live_dir: String,
+  #[serde(default)]
+  pub cert_name: String,
+  #[serde(default)]
+  pub domain: String,
+  #[serde(default)]
+  pub extra_domains: Vec<String>,
+  #[serde(default)]
+  pub email: String,
+  #[serde(default = "default_certbot_webroot_dir")]
+  pub webroot_dir: String,
+  #[serde(default = "default_certbot_challenge_addr")]
+  pub challenge_addr: String,
+  #[serde(default = "default_certbot_renew_interval_hours")]
+  pub renew_interval_hours: u64,
+  #[serde(default)]
+  pub staging: bool,
+}
+
+impl Default for CertbotConfig {
+  fn default() -> Self {
+    Self {
+      enabled: false,
+      certbot_bin: default_certbot_bin(),
+      live_dir: default_certbot_live_dir(),
+      cert_name: String::new(),
+      domain: String::new(),
+      extra_domains: Vec::new(),
+      email: String::new(),
+      webroot_dir: default_certbot_webroot_dir(),
+      challenge_addr: default_certbot_challenge_addr(),
+      renew_interval_hours: default_certbot_renew_interval_hours(),
+      staging: false,
+    }
+  }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -236,6 +310,71 @@ impl Default for AnomalyConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GpsConfig {
+  #[serde(default = "bool_true")]
+  pub enabled: bool,
+  #[serde(default = "default_gps_lookback_hours")]
+  pub default_lookback_hours: i64,
+  #[serde(default = "default_gps_min_hits")]
+  pub min_hits: i64,
+  #[serde(default = "default_gps_max_rules")]
+  pub max_rules: usize,
+}
+
+impl Default for GpsConfig {
+  fn default() -> Self {
+    Self {
+      enabled: true,
+      default_lookback_hours: default_gps_lookback_hours(),
+      min_hits: default_gps_min_hits(),
+      max_rules: default_gps_max_rules(),
+    }
+  }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum SlackSeverity {
+  Low,
+  #[default]
+  Medium,
+  High,
+  Critical,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlackConfig {
+  #[serde(default)]
+  pub enabled: bool,
+  #[serde(default)]
+  pub webhook_url: String,
+  #[serde(default)]
+  pub channel: String,
+  #[serde(default)]
+  pub username: String,
+  #[serde(default)]
+  pub icon_emoji: String,
+  #[serde(default)]
+  pub min_severity: SlackSeverity,
+  #[serde(default = "bool_true")]
+  pub include_rate_limits: bool,
+}
+
+impl Default for SlackConfig {
+  fn default() -> Self {
+    Self {
+      enabled: false,
+      webhook_url: String::new(),
+      channel: String::new(),
+      username: "NexusWAF".to_string(),
+      icon_emoji: ":shield:".to_string(),
+      min_severity: SlackSeverity::Medium,
+      include_rate_limits: true,
+    }
+  }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RulesConfig {
   pub rules_file: String,
 
@@ -309,6 +448,76 @@ impl Config {
         reason: "must not be empty".into(),
       });
     }
+    if self.gateway.tls.enabled
+      && !self.gateway.tls.certbot.enabled
+      && self.gateway.tls.cert_path.trim().is_empty()
+    {
+      return Err(NexusError::ConfigValidation {
+        field: "gateway.tls.cert_path".into(),
+        reason: "must not be empty when TLS is enabled".into(),
+      });
+    }
+    if self.gateway.tls.enabled
+      && !self.gateway.tls.certbot.enabled
+      && self.gateway.tls.key_path.trim().is_empty()
+    {
+      return Err(NexusError::ConfigValidation {
+        field: "gateway.tls.key_path".into(),
+        reason: "must not be empty when TLS is enabled".into(),
+      });
+    }
+    if self.gateway.tls.certbot.enabled && !self.gateway.tls.enabled {
+      return Err(NexusError::ConfigValidation {
+        field: "gateway.tls.certbot.enabled".into(),
+        reason: "requires gateway.tls.enabled = true".into(),
+      });
+    }
+    if self.gateway.tls.certbot.enabled && self.gateway.tls.certbot.domain.trim().is_empty() {
+      return Err(NexusError::ConfigValidation {
+        field: "gateway.tls.certbot.domain".into(),
+        reason: "must not be empty when Certbot automation is enabled".into(),
+      });
+    }
+    if self.gateway.tls.certbot.enabled && self.gateway.tls.certbot.email.trim().is_empty() {
+      return Err(NexusError::ConfigValidation {
+        field: "gateway.tls.certbot.email".into(),
+        reason: "must not be empty when Certbot automation is enabled".into(),
+      });
+    }
+    if self.gateway.tls.certbot.enabled && self.gateway.tls.certbot.webroot_dir.trim().is_empty() {
+      return Err(NexusError::ConfigValidation {
+        field: "gateway.tls.certbot.webroot_dir".into(),
+        reason: "must not be empty when Certbot automation is enabled".into(),
+      });
+    }
+    if self.gateway.tls.certbot.enabled
+      && self.gateway.tls.certbot.challenge_addr.trim().is_empty()
+    {
+      return Err(NexusError::ConfigValidation {
+        field: "gateway.tls.certbot.challenge_addr".into(),
+        reason: "must not be empty when Certbot automation is enabled".into(),
+      });
+    }
+    if self.gateway.tls.certbot.enabled && self.gateway.tls.certbot.live_dir.trim().is_empty() {
+      return Err(NexusError::ConfigValidation {
+        field: "gateway.tls.certbot.live_dir".into(),
+        reason: "must not be empty when Certbot automation is enabled".into(),
+      });
+    }
+    if self.gateway.tls.certbot.enabled && self.gateway.tls.certbot.renew_interval_hours == 0 {
+      return Err(NexusError::ConfigValidation {
+        field: "gateway.tls.certbot.renew_interval_hours".into(),
+        reason: "must be greater than 0 when Certbot automation is enabled".into(),
+      });
+    }
+    if self.gateway.tls.certbot.enabled
+      && self.gateway.tls.certbot.challenge_addr == self.gateway.listen_addr
+    {
+      return Err(NexusError::ConfigValidation {
+        field: "gateway.tls.certbot.challenge_addr".into(),
+        reason: "must differ from gateway.listen_addr so the ACME challenge server can bind separately".into(),
+      });
+    }
 
     if self.lb.upstreams.is_empty() {
       return Err(NexusError::ConfigValidation {
@@ -379,6 +588,30 @@ impl Config {
         reason: "must be between 0.0 and 1.0".into(),
       });
     }
+    if self.gps.default_lookback_hours <= 0 {
+      return Err(NexusError::ConfigValidation {
+        field: "gps.default_lookback_hours".into(),
+        reason: "must be greater than 0".into(),
+      });
+    }
+    if self.gps.min_hits <= 0 {
+      return Err(NexusError::ConfigValidation {
+        field: "gps.min_hits".into(),
+        reason: "must be greater than 0".into(),
+      });
+    }
+    if self.gps.max_rules == 0 {
+      return Err(NexusError::ConfigValidation {
+        field: "gps.max_rules".into(),
+        reason: "must be greater than 0".into(),
+      });
+    }
+    if self.slack.enabled && self.slack.webhook_url.trim().is_empty() {
+      return Err(NexusError::ConfigValidation {
+        field: "slack.webhook_url".into(),
+        reason: "must not be empty when Slack alerts are enabled".into(),
+      });
+    }
 
     if self.rate.requests_per_second == 0 {
       return Err(NexusError::ConfigValidation {
@@ -421,6 +654,27 @@ fn default_pid_file() -> String {
 }
 fn default_request_timeout_ms() -> u64 {
   30_000
+}
+fn default_certbot_bin() -> String {
+  "certbot".into()
+}
+fn default_certbot_live_dir() -> String {
+  if cfg!(windows) {
+    "C:/Certbot/live".into()
+  } else {
+    "/etc/letsencrypt/live".into()
+  }
+}
+fn default_certbot_webroot_dir() -> String {
+  let mut p: PathBuf = std::env::temp_dir();
+  p.push("nexus-certbot-webroot");
+  p.to_string_lossy().to_string()
+}
+fn default_certbot_challenge_addr() -> String {
+  "0.0.0.0:80".into()
+}
+fn default_certbot_renew_interval_hours() -> u64 {
+  12
 }
 fn default_risk_threshold() -> f32 {
   0.7
@@ -499,6 +753,15 @@ fn default_anomaly_ewma_alpha() -> f32 {
 }
 fn default_anomaly_cooldown_secs() -> u64 {
   30
+}
+fn default_gps_lookback_hours() -> i64 {
+  24
+}
+fn default_gps_min_hits() -> i64 {
+  3
+}
+fn default_gps_max_rules() -> usize {
+  8
 }
 fn default_postgres_url() -> String {
   "postgres://nexus:nexus@localhost:5432/nexus_waf".into()

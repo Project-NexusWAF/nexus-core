@@ -63,6 +63,55 @@ impl ConfigLoader {
     if let Ok(v) = std::env::var("NEXUS_GATEWAY_AUTH_TOKEN") {
       config.gateway.auth_token = if v.trim().is_empty() { None } else { Some(v) };
     }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_ENABLED") {
+      config.gateway.tls.enabled = v.to_lowercase() == "true" || v == "1";
+    }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_CERT_PATH") {
+      config.gateway.tls.cert_path = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_KEY_PATH") {
+      config.gateway.tls.key_path = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_CERTBOT_ENABLED") {
+      config.gateway.tls.certbot.enabled = v.to_lowercase() == "true" || v == "1";
+    }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_CERTBOT_BIN") {
+      config.gateway.tls.certbot.certbot_bin = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_CERTBOT_LIVE_DIR") {
+      config.gateway.tls.certbot.live_dir = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_CERTBOT_CERT_NAME") {
+      config.gateway.tls.certbot.cert_name = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_CERTBOT_DOMAIN") {
+      config.gateway.tls.certbot.domain = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_CERTBOT_EXTRA_DOMAINS") {
+      config.gateway.tls.certbot.extra_domains = v
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect();
+    }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_CERTBOT_EMAIL") {
+      config.gateway.tls.certbot.email = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_CERTBOT_WEBROOT_DIR") {
+      config.gateway.tls.certbot.webroot_dir = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_CERTBOT_CHALLENGE_ADDR") {
+      config.gateway.tls.certbot.challenge_addr = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_CERTBOT_RENEW_INTERVAL_HOURS") {
+      if let Ok(n) = v.parse() {
+        config.gateway.tls.certbot.renew_interval_hours = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_GATEWAY_TLS_CERTBOT_STAGING") {
+      config.gateway.tls.certbot.staging = v.to_lowercase() == "true" || v == "1";
+    }
     if let Ok(v) = std::env::var("NEXUS_GATEWAY_MAX_BODY_BYTES") {
       if let Ok(n) = v.parse() {
         config.gateway.max_body_bytes = n;
@@ -173,6 +222,50 @@ impl ConfigLoader {
       if let Ok(n) = v.parse() {
         config.anomaly.cooldown_secs = n;
       }
+    }
+    if let Ok(v) = std::env::var("NEXUS_GPS_ENABLED") {
+      config.gps.enabled = v.to_lowercase() != "false" && v != "0";
+    }
+    if let Ok(v) = std::env::var("NEXUS_GPS_LOOKBACK_HOURS") {
+      if let Ok(n) = v.parse() {
+        config.gps.default_lookback_hours = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_GPS_MIN_HITS") {
+      if let Ok(n) = v.parse() {
+        config.gps.min_hits = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_GPS_MAX_RULES") {
+      if let Ok(n) = v.parse() {
+        config.gps.max_rules = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_SLACK_ENABLED") {
+      config.slack.enabled = v.to_lowercase() == "true" || v == "1";
+    }
+    if let Ok(v) = std::env::var("NEXUS_SLACK_WEBHOOK_URL") {
+      config.slack.webhook_url = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_SLACK_CHANNEL") {
+      config.slack.channel = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_SLACK_USERNAME") {
+      config.slack.username = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_SLACK_ICON_EMOJI") {
+      config.slack.icon_emoji = v;
+    }
+    if let Ok(v) = std::env::var("NEXUS_SLACK_MIN_SEVERITY") {
+      config.slack.min_severity = match v.to_lowercase().as_str() {
+        "low" => crate::schema::SlackSeverity::Low,
+        "high" => crate::schema::SlackSeverity::High,
+        "critical" => crate::schema::SlackSeverity::Critical,
+        _ => crate::schema::SlackSeverity::Medium,
+      };
+    }
+    if let Ok(v) = std::env::var("NEXUS_SLACK_INCLUDE_RATE_LIMITS") {
+      config.slack.include_rate_limits = v.to_lowercase() != "false" && v != "0";
     }
 
     if let Ok(v) = std::env::var("NEXUS_PIPELINE_ML_ENABLED") {
@@ -289,6 +382,11 @@ rules_file = "config/rules.toml"
     assert!(!cfg.policy.allow_rate_limit_action);
     assert!(cfg.anomaly.enabled);
     assert_eq!(cfg.anomaly.window_secs, 10);
+    assert!(cfg.gps.enabled);
+    assert_eq!(cfg.gps.default_lookback_hours, 24);
+    assert!(!cfg.slack.enabled);
+    assert!(!cfg.gateway.tls.enabled);
+    assert!(!cfg.gateway.tls.certbot.enabled);
   }
 
   #[test]
@@ -337,5 +435,31 @@ rules_file = "config/rules.toml"
     std::env::remove_var("NEXUS_GATEWAY_REST_ADDR");
     std::env::remove_var("NEXUS_GATEWAY_PID_FILE");
     std::env::remove_var("NEXUS_GATEWAY_AUTH_TOKEN");
+  }
+
+  #[test]
+  fn env_overrides_certbot_fields() {
+    let _guard = env_lock();
+    std::env::set_var("NEXUS_GATEWAY_TLS_ENABLED", "true");
+    std::env::set_var("NEXUS_GATEWAY_TLS_CERTBOT_ENABLED", "true");
+    std::env::set_var("NEXUS_GATEWAY_TLS_CERTBOT_DOMAIN", "waf.example.com");
+    std::env::set_var("NEXUS_GATEWAY_TLS_CERTBOT_EMAIL", "ops@example.com");
+    std::env::set_var("NEXUS_GATEWAY_TLS_CERTBOT_EXTRA_DOMAINS", "api.example.com, www.example.com");
+
+    let cfg = ConfigLoader::from_str(MINIMAL_CONFIG).expect("config should parse");
+    assert!(cfg.gateway.tls.enabled);
+    assert!(cfg.gateway.tls.certbot.enabled);
+    assert_eq!(cfg.gateway.tls.certbot.domain, "waf.example.com");
+    assert_eq!(cfg.gateway.tls.certbot.email, "ops@example.com");
+    assert_eq!(
+      cfg.gateway.tls.certbot.extra_domains,
+      vec!["api.example.com".to_string(), "www.example.com".to_string()]
+    );
+
+    std::env::remove_var("NEXUS_GATEWAY_TLS_ENABLED");
+    std::env::remove_var("NEXUS_GATEWAY_TLS_CERTBOT_ENABLED");
+    std::env::remove_var("NEXUS_GATEWAY_TLS_CERTBOT_DOMAIN");
+    std::env::remove_var("NEXUS_GATEWAY_TLS_CERTBOT_EMAIL");
+    std::env::remove_var("NEXUS_GATEWAY_TLS_CERTBOT_EXTRA_DOMAINS");
   }
 }

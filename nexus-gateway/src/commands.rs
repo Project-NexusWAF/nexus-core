@@ -1,3 +1,4 @@
+use std::future::pending;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,6 +13,7 @@ use nexus_pipeline::PipelineBuilder;
 
 use crate::server;
 use crate::state::AppState;
+use crate::tls;
 
 pub async fn cmd_start(config_path: String, listen_override: Option<String>) -> anyhow::Result<()> {
   server::init_tracing();
@@ -37,12 +39,17 @@ pub async fn cmd_start(config_path: String, listen_override: Option<String>) -> 
     .context("failed to build application state")?;
   server::spawn_config_reload_task(Arc::clone(&state));
 
+  let prepared_tls = tls::prepare_tls(Arc::clone(&state))
+    .await
+    .context("failed to prepare TLS runtime")?;
+
   #[cfg(unix)]
   spawn_sighup_handler(config_path.clone(), Arc::clone(&state));
 
   let proxy_handle = tokio::spawn(server::run_gateway(
     config.gateway.listen_addr.clone(),
     Arc::clone(&state),
+    prepared_tls.rustls.clone(),
   ));
   let grpc_handle = tokio::spawn(server::run_grpc(
     config.gateway.control_addr.clone(),
@@ -55,6 +62,11 @@ pub async fn cmd_start(config_path: String, listen_override: Option<String>) -> 
   let metrics_handle = tokio::spawn(nexus_metrics::serve_metrics(
     config.gateway.metrics_addr.clone(),
   ));
+  let challenge_handle = prepared_tls.challenge_handle.unwrap_or_else(|| {
+    tokio::spawn(async {
+      pending::<anyhow::Result<()>>().await
+    })
+  });
 
   let run_result: anyhow::Result<()> = tokio::select! {
     res = proxy_handle => {
@@ -71,6 +83,10 @@ pub async fn cmd_start(config_path: String, listen_override: Option<String>) -> 
     }
     res = metrics_handle => {
       res.context("metrics task failed to join")??;
+      Ok(())
+    }
+    res = challenge_handle => {
+      res.context("ACME challenge task failed to join")??;
       Ok(())
     }
     _ = shutdown_signal() => {
@@ -181,6 +197,16 @@ pub async fn cmd_check(config_path: String) -> anyhow::Result<()> {
   println!("  grpc:     {}", config.gateway.control_addr);
   println!("  rest:     {}", config.gateway.rest_addr);
   println!("  metrics:  {}", config.gateway.metrics_addr);
+  println!(
+    "  tls:      {}",
+    if config.gateway.tls.certbot.enabled {
+      "enabled (certbot-managed)"
+    } else if config.gateway.tls.enabled {
+      "enabled (static cert/key)"
+    } else {
+      "disabled"
+    }
+  );
   println!("  upstream: {} configured", config.lb.upstreams.len());
   Ok(())
 }
@@ -288,9 +314,19 @@ fn spawn_sighup_handler(config_path: String, state: Arc<AppState>) {
       tracing::info!("SIGHUP received, reloading pipeline from config file");
       match ConfigLoader::from_file(&config_path) {
         Ok(cfg) => {
-          let pipeline = PipelineBuilder::from_config(&cfg);
+          let (telemetry, anomaly_state) = {
+            let current = state.control.pipeline.read();
+            (current.telemetry(), current.anomaly_state())
+          };
+          let pipeline =
+            PipelineBuilder::from_config_with_state(&cfg, telemetry, anomaly_state);
           if let Err(error) = pipeline.init().await {
             tracing::error!(error = %error, "reload failed during pipeline init");
+            state.slack_alerts.notify_system(
+              "SIGHUP Reload Failed",
+              format!("Pipeline init failed during reload: {error}"),
+              SlackSeverity::High,
+            );
             continue;
           }
           *state.control.pipeline.write() = pipeline;
@@ -300,9 +336,19 @@ fn spawn_sighup_handler(config_path: String, state: Arc<AppState>) {
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
             + 1;
           tracing::info!(config_version = version, "pipeline reloaded from SIGHUP");
+          state.slack_alerts.notify_system(
+            "SIGHUP Reload Applied",
+            format!("Pipeline reloaded from SIGHUP. Version {version}."),
+            SlackSeverity::Low,
+          );
         }
         Err(error) => {
           tracing::error!(error = %error, "reload failed: invalid config file");
+          state.slack_alerts.notify_system(
+            "SIGHUP Reload Failed",
+            format!("Reload aborted because config is invalid: {error}"),
+            SlackSeverity::High,
+          );
         }
       }
     }

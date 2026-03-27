@@ -229,10 +229,16 @@ impl PolicyLayer {
       }
       PolicyAction::RaiseThreshold => {
         adjust_threshold(ctx, self.base_risk_threshold, self.config.threshold_step);
+        ctx
+          .meta
+          .insert("risk_threshold_source".into(), self.name().into());
         Decision::Allow
       }
       PolicyAction::LowerThreshold => {
         adjust_threshold(ctx, self.base_risk_threshold, -self.config.threshold_step);
+        ctx
+          .meta
+          .insert("risk_threshold_source".into(), self.name().into());
         Decision::Allow
       }
       PolicyAction::RateLimit => {

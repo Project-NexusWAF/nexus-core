@@ -9,21 +9,24 @@ use http_body_util::Full;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
-use nexus_config::{Config, LiveConfig};
+use nexus_config::{Config, LiveConfig, SlackSeverity};
 use nexus_control::stats::ConfigLogEntry;
 use nexus_control::ControlAppState;
 use nexus_lb::LoadBalancer;
 use nexus_pipeline::{Pipeline, PipelineBuilder};
-use nexus_store::{LogWriter, StorePool};
+use nexus_store::{AttackLogCounters, LogWriter, StorePool};
 use parking_lot::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
+
+use crate::alerting::SlackAlertSender;
 
 pub type HyperClient = Client<HttpConnector, Full<Bytes>>;
 
 pub struct AppState {
   pub control: Arc<ControlAppState>,
   pub http_client: HyperClient,
+  pub slack_alerts: Arc<SlackAlertSender>,
   lb: Arc<RwLock<Arc<LoadBalancer>>>,
   lb_health: Mutex<Option<JoinHandle<()>>>,
 }
@@ -61,7 +64,7 @@ impl AppState {
       .await
       .context("pipeline initialization failed")?;
 
-    let (store, log_writer) = match StorePool::connect(&config.store).await {
+    let (store, log_writer, persisted_counters) = match StorePool::connect(&config.store).await {
       Ok(pool) => {
         let pool = Arc::new(pool);
         let writer = Arc::new(LogWriter::new(pool.pg.clone(), &config.store));
@@ -69,11 +72,18 @@ impl AppState {
         if let Err(error) = sync_rules_file_to_store(Arc::clone(&pool), Arc::clone(&config)).await {
           warn!(error = %error, "failed to sync rules file to PostgreSQL");
         }
-        (Some(pool), Some(writer))
+        let counters = match pool.attack_log_counters().await {
+          Ok(counters) => counters,
+          Err(error) => {
+            warn!(error = %error, "failed to hydrate counters from attack_logs");
+            AttackLogCounters::default()
+          }
+        };
+        (Some(pool), Some(writer), counters)
       }
       Err(error) => {
         warn!(error = %error, "DB unavailable, continuing without persistence");
-        (None, None)
+        (None, None, AttackLogCounters::default())
       }
     };
 
@@ -93,19 +103,31 @@ impl AppState {
       load_balancer: Arc::clone(&lb_handle),
       config_version: Arc::new(AtomicU64::new(1)),
       config_log,
-      requests_total: AtomicU64::new(0),
-      blocked_total: AtomicU64::new(0),
-      rate_limited_total: AtomicU64::new(0),
+      requests_total: AtomicU64::new(persisted_counters.requests_total),
+      blocked_total: AtomicU64::new(persisted_counters.blocked_total),
+      rate_limited_total: AtomicU64::new(persisted_counters.rate_limited_total),
       store,
       log_writer,
       admin_token,
     });
+    let slack_alerts = SlackAlertSender::new(control.live_config.clone());
+    if config.slack.enabled && !config.slack.webhook_url.trim().is_empty() {
+      slack_alerts.notify_system(
+        "Slack Alerting Enabled",
+        format!(
+          "NexusWAF started with Slack alerting enabled. Minimum severity is {:?}.",
+          config.slack.min_severity
+        ),
+        SlackSeverity::Medium,
+      );
+    }
 
     let lb_health = spawn_lb_health(Arc::clone(&lb), config.lb.health_check_interval_secs);
 
     Ok(Arc::new(Self {
       control,
       http_client: build_http_client(),
+      slack_alerts,
       lb: lb_handle,
       lb_health: Mutex::new(Some(lb_health)),
     }))
