@@ -1,6 +1,6 @@
 # NexusWAF — Rust Core
 
-**Advanced Web Application Firewall · Group AA3 · Framework Engineering College**
+**Advanced Web Application Firewall · Group AA3 · Model Engineering College**
 
 ---
 
