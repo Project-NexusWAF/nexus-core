@@ -17,6 +17,7 @@ mime_guess = "2"
 nexus-common = { workspace = true }
 nexus-config = { workspace = true }
 nexus-lb = { workspace = true }
+nexus-policy = { workspace = true }
 nexus-pipeline = { workspace = true }
 nexus-rules = { workspace = true }
 nexus-store = { workspace = true }

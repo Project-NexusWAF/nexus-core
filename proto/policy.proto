@@ -1,0 +1,111 @@
+syntax = "proto3";
+
+package nexus.policy;
+
+service PolicyService {
+  rpc Decide(PolicyRequest) returns (PolicyResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc ReportEvents(PolicyEventBatch) returns (PolicyEventAck);
+  rpc ListFeedbackEvents(ListFeedbackEventsRequest) returns (ListFeedbackEventsResponse);
+  rpc TrainPolicy(TrainPolicyRequest) returns (TrainPolicyResponse);
+}
+
+message PolicyRequest {
+  string request_id = 1;
+  repeated float features = 2;
+  string client_ip = 3;
+  string method = 4;
+  string uri = 5;
+  repeated string threat_tags = 6;
+  float risk_score = 7;
+  map<string, string> meta = 8;
+}
+
+message PolicyResponse {
+  int32 action_id = 1;
+  string action_name = 2;
+  float confidence = 3;
+  repeated float q_values = 4;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  bool ready = 1;
+  string model = 2;
+  uint64 feedback_events_total = 3;
+  uint64 replay_size = 4;
+  float last_loss = 5;
+  bool online_training_enabled = 6;
+}
+
+message PolicyEventBatch {
+  repeated PolicyEvent events = 1;
+}
+
+message PolicyEvent {
+  string request_id = 1;
+  int64 unix_time_ms = 2;
+  repeated float features = 3;
+  int32 policy_action_id = 4;
+  string policy_action_name = 5;
+  float policy_confidence = 6;
+  string final_decision = 7;
+  string decided_by = 8;
+  float final_risk_score = 9;
+  repeated string threat_tags = 10;
+  string block_code = 11;
+  string ml_label = 12;
+  float ml_score = 13;
+  bool has_ml_score = 14;
+  bool rate_limited = 15;
+  string method = 16;
+  string uri = 17;
+  string client_ip = 18;
+  string content_type = 19;
+  string body_excerpt = 20;
+  map<string, string> meta = 21;
+}
+
+message PolicyEventAck {
+  uint32 accepted = 1;
+  uint64 feedback_events_total = 2;
+  uint64 replay_size = 3;
+  float last_loss = 4;
+  bool trained = 5;
+}
+
+message ListFeedbackEventsRequest {
+  uint32 limit = 1;
+}
+
+message FeedbackEvent {
+  string request_id = 1;
+  int64 unix_time_ms = 2;
+  string policy_action_name = 3;
+  string final_decision = 4;
+  string decided_by = 5;
+  float reward = 6;
+  string method = 7;
+  string uri = 8;
+  string block_code = 9;
+  bool rate_limited = 10;
+}
+
+message ListFeedbackEventsResponse {
+  repeated FeedbackEvent events = 1;
+}
+
+message TrainPolicyRequest {
+  uint32 gradient_updates = 1;
+  uint32 replay_from_log_limit = 2;
+}
+
+message TrainPolicyResponse {
+  bool accepted = 1;
+  string message = 2;
+  uint32 updates_run = 3;
+  uint64 replay_size = 4;
+  float last_loss = 5;
+  bool checkpoint_saved = 6;
+}

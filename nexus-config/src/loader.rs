@@ -186,6 +186,19 @@ impl ConfigLoader {
     if let Ok(v) = std::env::var("NEXUS_POLICY_ALLOW_RATE_LIMIT_ACTION") {
       config.policy.allow_rate_limit_action = v.to_lowercase() != "false" && v != "0";
     }
+    if let Ok(v) = std::env::var("NEXUS_POLICY_FEEDBACK_ENABLED") {
+      config.policy.feedback_enabled = v.to_lowercase() != "false" && v != "0";
+    }
+    if let Ok(v) = std::env::var("NEXUS_POLICY_FEEDBACK_BATCH_SIZE") {
+      if let Ok(n) = v.parse() {
+        config.policy.feedback_batch_size = n;
+      }
+    }
+    if let Ok(v) = std::env::var("NEXUS_POLICY_FEEDBACK_FLUSH_MS") {
+      if let Ok(n) = v.parse() {
+        config.policy.feedback_flush_ms = n;
+      }
+    }
 
     if let Ok(v) = std::env::var("NEXUS_ANOMALY_ENABLED") {
       config.anomaly.enabled = v.to_lowercase() != "false" && v != "0";
@@ -377,9 +390,12 @@ rules_file = "config/rules.toml"
     assert_eq!(cfg.store.influx_bucket, "waf_metrics");
     assert_eq!(cfg.store.log_batch_size, 100);
     assert_eq!(cfg.store.log_flush_ms, 500);
-    assert_eq!(cfg.policy.endpoint, "http://127.0.0.1:50053");
+    assert_eq!(cfg.policy.endpoint, "http://127.0.0.1:50052");
     assert!(cfg.policy.enabled);
     assert!(!cfg.policy.allow_rate_limit_action);
+    assert!(cfg.policy.feedback_enabled);
+    assert_eq!(cfg.policy.feedback_batch_size, 64);
+    assert_eq!(cfg.policy.feedback_flush_ms, 1_000);
     assert!(cfg.anomaly.enabled);
     assert_eq!(cfg.anomaly.window_secs, 10);
     assert!(cfg.gps.enabled);

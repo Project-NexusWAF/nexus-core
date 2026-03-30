@@ -11,7 +11,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::ops::{self, LogsQuery};
-use crate::stats::{SynthesizeRulesBody, UpdateRulesBody};
+use crate::stats::{ManualTrainBody, PolicyEventsQuery, SynthesizeRulesBody, UpdateRulesBody};
 use crate::ControlAppState;
 
 pub fn rest_router(state: Arc<ControlAppState>) -> Router {
@@ -27,6 +27,9 @@ pub fn rest_router(state: Arc<ControlAppState>) -> Router {
     )
     .route("/api/rules/synthesize", post(synthesize_rules_handler))
     .route("/api/rules/versions", get(rule_versions_handler))
+    .route("/api/policy", get(policy_status_handler))
+    .route("/api/policy/events", get(policy_events_handler))
+    .route("/api/policy/train", post(policy_train_handler))
     .route("/api/config", get(config_handler))
     .route("/api/config/logs", get(config_logs_handler))
     .layer(middleware::from_fn_with_state(
@@ -137,6 +140,45 @@ async fn synthesize_rules_handler(
 
 async fn config_handler(State(state): State<Arc<ControlAppState>>) -> impl IntoResponse {
   (StatusCode::OK, Json(ops::config_snapshot(&state)))
+}
+
+async fn policy_status_handler(State(state): State<Arc<ControlAppState>>) -> impl IntoResponse {
+  match ops::policy_service_snapshot(&state).await {
+    Ok(result) => (
+      StatusCode::OK,
+      Json(serde_json::to_value(result).unwrap_or_default()),
+    ),
+    Err(error) => internal_error(error),
+  }
+}
+
+async fn policy_events_handler(
+  State(state): State<Arc<ControlAppState>>,
+  Query(query): Query<PolicyEventsQuery>,
+) -> impl IntoResponse {
+  match ops::list_policy_feedback_events(&state, query).await {
+    Ok(result) => (
+      StatusCode::OK,
+      Json(serde_json::to_value(result).unwrap_or_default()),
+    ),
+    Err(error) => internal_error(error),
+  }
+}
+
+async fn policy_train_handler(
+  State(state): State<Arc<ControlAppState>>,
+  Json(body): Json<ManualTrainBody>,
+) -> impl IntoResponse {
+  match ops::manual_train_policy(&state, body).await {
+    Ok(result) => (
+      StatusCode::OK,
+      Json(serde_json::to_value(result).unwrap_or_default()),
+    ),
+    Err(error) => (
+      StatusCode::BAD_REQUEST,
+      Json(serde_json::json!({ "error": error.to_string() })),
+    ),
+  }
 }
 
 async fn config_logs_handler(State(state): State<Arc<ControlAppState>>) -> impl IntoResponse {

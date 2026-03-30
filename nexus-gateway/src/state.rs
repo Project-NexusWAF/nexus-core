@@ -14,6 +14,7 @@ use nexus_control::stats::ConfigLogEntry;
 use nexus_control::ControlAppState;
 use nexus_lb::LoadBalancer;
 use nexus_pipeline::{Pipeline, PipelineBuilder};
+use nexus_policy::PolicyFeedbackWriter;
 use nexus_store::{AttackLogCounters, LogWriter, StorePool};
 use parking_lot::{Mutex, RwLock};
 use tokio::task::JoinHandle;
@@ -27,6 +28,7 @@ pub struct AppState {
   pub control: Arc<ControlAppState>,
   pub http_client: HyperClient,
   pub slack_alerts: Arc<SlackAlertSender>,
+  pub policy_feedback: Option<Arc<PolicyFeedbackWriter>>,
   lb: Arc<RwLock<Arc<LoadBalancer>>>,
   lb_health: Mutex<Option<JoinHandle<()>>>,
 }
@@ -111,6 +113,11 @@ impl AppState {
       admin_token,
     });
     let slack_alerts = SlackAlertSender::new(control.live_config.clone());
+    let policy_feedback = if config.policy.enabled && config.policy.feedback_enabled {
+      Some(Arc::new(PolicyFeedbackWriter::from_config(&config.policy)))
+    } else {
+      None
+    };
     if config.slack.enabled && !config.slack.webhook_url.trim().is_empty() {
       slack_alerts.notify_system(
         "Slack Alerting Enabled",
@@ -128,6 +135,7 @@ impl AppState {
       control,
       http_client: build_http_client(),
       slack_alerts,
+      policy_feedback,
       lb: lb_handle,
       lb_health: Mutex::new(Some(lb_health)),
     }))

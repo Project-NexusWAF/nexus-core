@@ -30,9 +30,8 @@ staging = false
 
 [pipeline]
 risk_threshold = 0.7
-ml_enabled = true
+ml_enabled = false
 short_circuit = true
-
 
 [rate]
 enabled = true
@@ -66,14 +65,14 @@ rules_file = "config/rules.toml"
 fail_closed = true
 
 [ml]
-endpoint = "http://127.0.0.1:50053"
+endpoint = "http://127.0.0.1:50052"
 timeout_ms = 10000
 risk_delta = 0.6
 confidence_threshold = 0.8
 
 [policy]
 enabled = true
-endpoint = "http://127.0.0.1:50053"
+endpoint = "http://127.0.0.1:50052"
 timeout_ms = 2000
 fallback_action = "auto"
 latency_budget_ms = 20
@@ -81,6 +80,9 @@ threshold_step = 0.1
 rate_limit_seconds = 30
 attack_rate_threshold = 0.3
 allow_rate_limit_action = false
+feedback_enabled = true
+feedback_batch_size = 64
+feedback_flush_ms = 1000
 
 [anomaly]
 enabled = true
@@ -99,7 +101,7 @@ min_hits = 3
 max_rules = 8
 
 [slack]
-enabled = true
+enabled = false
 webhook_url = "https://hooks.slack.com/services/XXXXXXXXXXXXXXXXXXXXXXX/XXXXXXXXXXXXXXXXXXXXXXXX"
 channel = "all-nexus-waf"
 username = "NexusWAF"
