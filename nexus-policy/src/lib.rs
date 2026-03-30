@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -5,12 +6,21 @@ use async_trait::async_trait;
 use nexus_common::{BlockCode, Decision, InnerLayer, RequestContext, Result};
 use nexus_config::{PipelineConfig, PolicyConfig};
 use nexus_telemetry::PolicyTelemetry;
-use serde::{Deserialize, Serialize};
-use tracing::warn;
+use tokio::sync::mpsc;
+use tonic::transport::{Channel, Endpoint};
+use tracing::{debug, warn};
+
+use crate::proto::policy_service_client::PolicyServiceClient;
+use crate::proto::{PolicyEvent as ProtoPolicyEvent, PolicyEventBatch, PolicyRequest};
+
+pub mod proto;
 
 use crate::circuit_breaker::CircuitBreaker;
 
 mod circuit_breaker;
+
+const FEEDBACK_CHANNEL_CAPACITY: usize = 10_000;
+const DEFAULT_BODY_EXCERPT_BYTES: usize = 512;
 
 #[derive(Debug, Clone, Copy)]
 pub enum PolicyAction {
@@ -45,23 +55,29 @@ pub struct PolicyDecision {
   pub action_name: String,
   pub confidence: f32,
   pub duration: Duration,
-  pub available: bool,
 }
 
+#[derive(Clone)]
 pub struct PolicyClient {
   endpoint: String,
-  http: reqwest::Client,
+  timeout: Duration,
+  channel: Channel,
   breaker: Arc<CircuitBreaker>,
 }
 
 impl PolicyClient {
   pub fn new(endpoint: String, timeout_ms: u64) -> Self {
+    let timeout = Duration::from_millis(timeout_ms);
+    let channel = Endpoint::from_shared(endpoint.clone())
+      .expect("valid policy.endpoint")
+      .connect_timeout(timeout)
+      .timeout(timeout)
+      .connect_lazy();
+
     Self {
       endpoint,
-      http: reqwest::Client::builder()
-        .timeout(Duration::from_millis(timeout_ms))
-        .build()
-        .expect("policy http client"),
+      timeout,
+      channel,
       breaker: CircuitBreaker::new(5, Duration::from_secs(30)),
     }
   }
@@ -70,38 +86,38 @@ impl PolicyClient {
     Self::new(cfg.endpoint.clone(), cfg.timeout_ms)
   }
 
-  fn decision_url(&self) -> String {
-    if self.endpoint.ends_with("/decide") {
-      self.endpoint.clone()
-    } else {
-      format!("{}/decide", self.endpoint.trim_end_matches('/'))
-    }
+  pub fn endpoint(&self) -> &str {
+    &self.endpoint
   }
 
-  pub async fn decide(&self, features: &[f32]) -> std::result::Result<PolicyDecision, String> {
+  pub async fn decide(
+    &self,
+    ctx: &RequestContext,
+    features: &[f32],
+  ) -> std::result::Result<PolicyDecision, String> {
     if self.breaker.is_open() {
       return Err("policy circuit open".to_string());
     }
 
-    let request = PolicyRequest {
-      features: features.to_vec(),
-    };
-    let url = self.decision_url();
     let start = Instant::now();
+    let request = PolicyRequest {
+      request_id: ctx.id.to_string(),
+      features: features.to_vec(),
+      client_ip: ctx.client_ip.to_string(),
+      method: ctx.method.0.as_str().to_string(),
+      uri: ctx.uri.clone(),
+      threat_tags: sorted_threat_tags(ctx),
+      risk_score: ctx.risk_score,
+      meta: ctx.meta.clone(),
+    };
 
-    let resp = self
-      .http
-      .post(&url)
-      .json(&request)
-      .send()
+    let mut client = PolicyServiceClient::new(self.channel.clone());
+    let resp = tokio::time::timeout(self.timeout, client.decide(tonic::Request::new(request)))
       .await
+      .map_err(|_| "policy timeout".to_string())?
       .map_err(|e| e.to_string())?;
 
-    if !resp.status().is_success() {
-      return Err(format!("policy HTTP {}", resp.status()));
-    }
-
-    let payload: PolicyResponse = resp.json().await.map_err(|e| e.to_string())?;
+    let payload = resp.into_inner();
     let action = PolicyAction::from_id(payload.action_id)
       .ok_or_else(|| "unknown policy action".to_string())?;
 
@@ -111,21 +127,36 @@ impl PolicyClient {
       action_name: payload.action_name,
       confidence: payload.confidence,
       duration: start.elapsed(),
-      available: true,
     })
   }
-}
 
-#[derive(Serialize)]
-struct PolicyRequest {
-  features: Vec<f32>,
-}
+  pub async fn report_events(
+    &self,
+    events: Vec<PolicyFeedbackEvent>,
+  ) -> std::result::Result<crate::proto::PolicyEventAck, String> {
+    if events.is_empty() {
+      return Ok(crate::proto::PolicyEventAck {
+        accepted: 0,
+        feedback_events_total: 0,
+        replay_size: 0,
+        last_loss: 0.0,
+        trained: false,
+      });
+    }
 
-#[derive(Deserialize)]
-struct PolicyResponse {
-  action_id: i32,
-  action_name: String,
-  confidence: f32,
+    let mut client = PolicyServiceClient::new(self.channel.clone());
+    let request = PolicyEventBatch {
+      events: events.into_iter().map(PolicyFeedbackEvent::into_proto).collect(),
+    };
+
+    let response =
+      tokio::time::timeout(self.timeout, client.report_events(tonic::Request::new(request)))
+        .await
+        .map_err(|_| "policy feedback timeout".to_string())?
+        .map_err(|e| e.to_string())?;
+
+    Ok(response.into_inner())
+  }
 }
 
 pub struct PolicyLayer {
@@ -160,14 +191,26 @@ impl InnerLayer for PolicyLayer {
     35
   }
 
+  async fn init(&self) -> Result<()> {
+    tracing::info!(
+      endpoint = %self.client.endpoint(),
+      enabled = self.config.enabled,
+      "Policy layer initialised"
+    );
+    Ok(())
+  }
+
   async fn analyse(&self, ctx: &mut RequestContext) -> Result<Decision> {
     if !self.config.enabled {
       return Ok(Decision::Allow);
     }
 
     let features = build_feature_vector(ctx, &self.telemetry, self.config.latency_budget_ms);
+    ctx
+      .meta
+      .insert("policy_features".into(), serialise_feature_vector(&features));
 
-    let decision = match self.client.decide(&features).await {
+    let decision = match self.client.decide(ctx, &features).await {
       Ok(decision) => {
         self.client.breaker.record_success();
         decision
@@ -175,7 +218,7 @@ impl InnerLayer for PolicyLayer {
       Err(error) => {
         self.client.breaker.record_failure();
         if error.contains("circuit open") {
-          tracing::debug!(
+          debug!(
             request_id = %ctx.id,
             error = %error,
             "Policy circuit open; applying fallback"
@@ -187,6 +230,7 @@ impl InnerLayer for PolicyLayer {
             "Policy service unavailable; applying fallback"
           );
         }
+        ctx.meta.insert("policy_fallback".into(), "true".into());
         return Ok(self.apply_fallback(ctx));
       }
     };
@@ -200,6 +244,10 @@ impl InnerLayer for PolicyLayer {
     ctx
       .meta
       .insert("policy_confidence".into(), format!("{:.3}", decision.confidence));
+    ctx.meta.insert(
+      "policy_duration_ms".into(),
+      format!("{:.3}", decision.duration.as_secs_f64() * 1_000.0),
+    );
 
     Ok(self.apply_action(ctx, decision.action))
   }
@@ -209,18 +257,21 @@ impl PolicyLayer {
   fn apply_action(&self, ctx: &mut RequestContext, action: PolicyAction) -> Decision {
     match action {
       PolicyAction::AllowNoMl => {
+        stamp_effective_action(ctx, PolicyAction::AllowNoMl);
         ctx.meta.insert("skip_ml".into(), "true".into());
         Decision::Allow
       }
       PolicyAction::InvokeMl => {
+        stamp_effective_action(ctx, PolicyAction::InvokeMl);
         ctx.meta.insert("skip_ml".into(), "false".into());
         Decision::Allow
       }
-      PolicyAction::BlockImmediate => Decision::block(
-        "Policy decision: block immediately",
-        BlockCode::MlDetectedThreat,
-      ),
+      PolicyAction::BlockImmediate => {
+        stamp_effective_action(ctx, PolicyAction::BlockImmediate);
+        Decision::block("Policy decision: block immediately", BlockCode::MlDetectedThreat)
+      }
       PolicyAction::LogAllow => {
+        stamp_effective_action(ctx, PolicyAction::LogAllow);
         ctx.tag("policy_log", self.name());
         ctx.meta.insert("skip_ml".into(), "true".into());
         Decision::Log {
@@ -228,6 +279,7 @@ impl PolicyLayer {
         }
       }
       PolicyAction::RaiseThreshold => {
+        stamp_effective_action(ctx, PolicyAction::RaiseThreshold);
         adjust_threshold(ctx, self.base_risk_threshold, self.config.threshold_step);
         ctx
           .meta
@@ -235,6 +287,7 @@ impl PolicyLayer {
         Decision::Allow
       }
       PolicyAction::LowerThreshold => {
+        stamp_effective_action(ctx, PolicyAction::LowerThreshold);
         adjust_threshold(ctx, self.base_risk_threshold, -self.config.threshold_step);
         ctx
           .meta
@@ -243,11 +296,13 @@ impl PolicyLayer {
       }
       PolicyAction::RateLimit => {
         if self.config.allow_rate_limit_action {
+          stamp_effective_action(ctx, PolicyAction::RateLimit);
           ctx.rate_limited = true;
           Decision::RateLimit {
             retry_after_seconds: self.config.rate_limit_seconds,
           }
         } else {
+          stamp_effective_action(ctx, PolicyAction::AllowNoMl);
           ctx.meta.insert("skip_ml".into(), "true".into());
           Decision::Allow
         }
@@ -284,6 +339,200 @@ impl PolicyLayer {
   }
 }
 
+#[derive(Debug, Clone)]
+pub struct PolicyFeedbackEvent {
+  pub request_id: String,
+  pub unix_time_ms: i64,
+  pub features: Vec<f32>,
+  pub policy_action_id: i32,
+  pub policy_action_name: String,
+  pub policy_confidence: f32,
+  pub final_decision: String,
+  pub decided_by: String,
+  pub final_risk_score: f32,
+  pub threat_tags: Vec<String>,
+  pub block_code: String,
+  pub ml_label: String,
+  pub ml_score: f32,
+  pub has_ml_score: bool,
+  pub rate_limited: bool,
+  pub method: String,
+  pub uri: String,
+  pub client_ip: String,
+  pub content_type: String,
+  pub body_excerpt: String,
+  pub meta: HashMap<String, String>,
+}
+
+impl PolicyFeedbackEvent {
+  pub fn from_context(
+    ctx: &RequestContext,
+    decision: &Decision,
+    decided_by: Option<&str>,
+    final_risk_score: f32,
+  ) -> Option<Self> {
+    let features = parse_feature_vector(ctx.meta.get("policy_features")?)?;
+    let policy_action_id = ctx
+      .meta
+      .get("policy_effective_action_id")
+      .or_else(|| ctx.meta.get("policy_action_id"))?
+      .parse()
+      .ok()?;
+    let policy_action_name = ctx
+      .meta
+      .get("policy_effective_action")
+      .or_else(|| ctx.meta.get("policy_action"))?
+      .clone();
+    let policy_confidence = ctx
+      .meta
+      .get("policy_confidence")
+      .and_then(|value| value.parse::<f32>().ok())
+      .unwrap_or(0.0);
+
+    let (final_decision, block_code) = match decision {
+      Decision::Allow => ("allow".to_string(), String::new()),
+      Decision::Log { .. } => ("log".to_string(), String::new()),
+      Decision::RateLimit { .. } => ("rate_limit".to_string(), String::new()),
+      Decision::Block { code, .. } => ("block".to_string(), format!("{code:?}")),
+    };
+
+    let mut threat_tags: Vec<String> = ctx.threat_tags.iter().cloned().collect();
+    threat_tags.sort();
+
+    Some(Self {
+      request_id: ctx.id.to_string(),
+      unix_time_ms: ctx.recieved_at.timestamp_millis(),
+      features,
+      policy_action_id,
+      policy_action_name,
+      policy_confidence,
+      final_decision,
+      decided_by: decided_by.unwrap_or_default().to_string(),
+      final_risk_score,
+      threat_tags,
+      block_code,
+      ml_label: ctx.ml_label.clone().unwrap_or_default(),
+      ml_score: ctx.ml_score.unwrap_or_default(),
+      has_ml_score: ctx.ml_score.is_some(),
+      rate_limited: matches!(decision, Decision::RateLimit { .. }) || ctx.rate_limited,
+      method: ctx.method.0.as_str().to_string(),
+      uri: ctx.uri.clone(),
+      client_ip: ctx.client_ip.to_string(),
+      content_type: content_type_name(ctx),
+      body_excerpt: body_excerpt(ctx, DEFAULT_BODY_EXCERPT_BYTES),
+      meta: ctx.meta.clone(),
+    })
+  }
+
+  fn into_proto(self) -> ProtoPolicyEvent {
+    ProtoPolicyEvent {
+      request_id: self.request_id,
+      unix_time_ms: self.unix_time_ms,
+      features: self.features,
+      policy_action_id: self.policy_action_id,
+      policy_action_name: self.policy_action_name,
+      policy_confidence: self.policy_confidence,
+      final_decision: self.final_decision,
+      decided_by: self.decided_by,
+      final_risk_score: self.final_risk_score,
+      threat_tags: self.threat_tags,
+      block_code: self.block_code,
+      ml_label: self.ml_label,
+      ml_score: self.ml_score,
+      has_ml_score: self.has_ml_score,
+      rate_limited: self.rate_limited,
+      method: self.method,
+      uri: self.uri,
+      client_ip: self.client_ip,
+      content_type: self.content_type,
+      body_excerpt: self.body_excerpt,
+      meta: self.meta,
+    }
+  }
+}
+
+pub struct PolicyFeedbackWriter {
+  tx: mpsc::Sender<PolicyFeedbackEvent>,
+}
+
+impl PolicyFeedbackWriter {
+  pub fn from_config(cfg: &PolicyConfig) -> Self {
+    Self::new(
+      Arc::new(PolicyClient::from_config(cfg)),
+      cfg.feedback_batch_size.max(1),
+      cfg.feedback_flush_ms.max(1),
+    )
+  }
+
+  pub fn new(client: Arc<PolicyClient>, batch_size: usize, flush_ms: u64) -> Self {
+    let (tx, mut rx) = mpsc::channel::<PolicyFeedbackEvent>(FEEDBACK_CHANNEL_CAPACITY);
+
+    tokio::spawn(async move {
+      let mut batch = Vec::with_capacity(batch_size);
+      let mut interval = tokio::time::interval(Duration::from_millis(flush_ms));
+      interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+      loop {
+        tokio::select! {
+          event = rx.recv() => {
+            match event {
+              Some(event) => {
+                batch.push(event);
+                if batch.len() >= batch_size {
+                  flush_feedback_batch(client.as_ref(), &mut batch).await;
+                }
+              }
+              None => {
+                if !batch.is_empty() {
+                  flush_feedback_batch(client.as_ref(), &mut batch).await;
+                }
+                break;
+              }
+            }
+          }
+          _ = interval.tick() => {
+            if !batch.is_empty() {
+              flush_feedback_batch(client.as_ref(), &mut batch).await;
+            }
+          }
+        }
+      }
+    });
+
+    Self { tx }
+  }
+
+  pub fn record(&self, event: PolicyFeedbackEvent) {
+    if self.tx.try_send(event).is_err() {
+      warn!("PolicyFeedbackWriter channel full or closed - dropping event");
+    }
+  }
+}
+
+async fn flush_feedback_batch(client: &PolicyClient, batch: &mut Vec<PolicyFeedbackEvent>) {
+  if batch.is_empty() {
+    return;
+  }
+
+  let pending = std::mem::take(batch);
+  let count = pending.len();
+  match client.report_events(pending).await {
+    Ok(ack) => {
+      debug!(
+        accepted = ack.accepted,
+        feedback_events_total = ack.feedback_events_total,
+        replay_size = ack.replay_size,
+        trained = ack.trained,
+        last_loss = ack.last_loss,
+        "Policy feedback batch flushed"
+      );
+    }
+    Err(error) => {
+      warn!(error = %error, count, "Policy feedback batch flush failed - batch dropped");
+    }
+  }
+}
+
 fn adjust_threshold(ctx: &mut RequestContext, base: f32, delta: f32) {
   let current = ctx
     .meta
@@ -293,6 +542,24 @@ fn adjust_threshold(ctx: &mut RequestContext, base: f32, delta: f32) {
   let next = (current + delta).clamp(0.0, 1.0);
   ctx.meta
     .insert("risk_threshold".into(), format!("{:.3}", next));
+}
+
+fn stamp_effective_action(ctx: &mut RequestContext, action: PolicyAction) {
+  let (id, name) = match action {
+    PolicyAction::AllowNoMl => (0, "allow_no_ml"),
+    PolicyAction::InvokeMl => (1, "invoke_ml"),
+    PolicyAction::BlockImmediate => (2, "block_immediate"),
+    PolicyAction::LogAllow => (3, "log_and_allow"),
+    PolicyAction::RaiseThreshold => (4, "raise_threshold"),
+    PolicyAction::LowerThreshold => (5, "lower_threshold"),
+    PolicyAction::RateLimit => (6, "rate_limit_ip"),
+  };
+  ctx
+    .meta
+    .insert("policy_effective_action_id".into(), id.to_string());
+  ctx
+    .meta
+    .insert("policy_effective_action".into(), name.to_string());
 }
 
 fn build_feature_vector(
@@ -352,11 +619,58 @@ fn encode_content_type(ctx: &RequestContext) -> f32 {
     Some(ContentType::Json) => 1.0,
     Some(ContentType::FormUrlEncoded) => 2.0,
     Some(ContentType::Multipart) => 3.0,
-    Some(ContentType::Xml) => 1.0,
-    Some(ContentType::PlainText) => 1.0,
-    Some(ContentType::Other(_)) => 1.0,
+    Some(ContentType::Xml) => 4.0,
+    Some(ContentType::PlainText) => 5.0,
+    Some(ContentType::Other(_)) => 0.0,
   };
-  raw / 3.0
+  raw / 5.0
+}
+
+fn content_type_name(ctx: &RequestContext) -> String {
+  use nexus_common::ContentType;
+  match ctx.content_type.as_ref() {
+    None => String::new(),
+    Some(ContentType::Json) => "json".into(),
+    Some(ContentType::FormUrlEncoded) => "form_urlencoded".into(),
+    Some(ContentType::Multipart) => "multipart".into(),
+    Some(ContentType::Xml) => "xml".into(),
+    Some(ContentType::PlainText) => "plain_text".into(),
+    Some(ContentType::Other(value)) => value.clone(),
+  }
+}
+
+fn sorted_threat_tags(ctx: &RequestContext) -> Vec<String> {
+  let mut tags: Vec<String> = ctx.threat_tags.iter().cloned().collect();
+  tags.sort();
+  tags
+}
+
+fn serialise_feature_vector(features: &[f32]) -> String {
+  features
+    .iter()
+    .map(|value| format!("{value:.6}"))
+    .collect::<Vec<_>>()
+    .join(",")
+}
+
+fn parse_feature_vector(raw: &str) -> Option<Vec<f32>> {
+  let values = raw
+    .split(',')
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .map(|value| value.parse::<f32>().ok())
+    .collect::<Option<Vec<_>>>()?;
+
+  if values.is_empty() {
+    None
+  } else {
+    Some(values)
+  }
+}
+
+fn body_excerpt(ctx: &RequestContext, max_bytes: usize) -> String {
+  let excerpt_len = ctx.body.len().min(max_bytes);
+  String::from_utf8_lossy(&ctx.body[..excerpt_len]).to_string()
 }
 
 #[cfg(test)]
@@ -396,5 +710,47 @@ mod tests {
       .parse::<f32>()
       .unwrap();
     assert!(value <= 1.0);
+  }
+
+  #[test]
+  fn feature_vector_round_trip_survives_serialisation() {
+    let values = vec![0.1, 0.2, 0.3, 1.0];
+    let raw = serialise_feature_vector(&values);
+    let parsed = parse_feature_vector(&raw).unwrap();
+    assert_eq!(parsed.len(), values.len());
+    assert!((parsed[2] - values[2]).abs() < 0.0001);
+  }
+
+  #[test]
+  fn feedback_event_requires_policy_metadata() {
+    let ctx = make_ctx();
+    let decision = Decision::Allow;
+    assert!(PolicyFeedbackEvent::from_context(&ctx, &decision, None, 0.0).is_none());
+  }
+
+  #[test]
+  fn feedback_event_builds_from_policy_context() {
+    let mut ctx = make_ctx();
+    ctx.meta.insert("policy_features".into(), "0.1,0.2,0.3".into());
+    ctx.meta.insert("policy_action_id".into(), "2".into());
+    ctx.meta.insert("policy_action".into(), "block_immediate".into());
+    ctx.meta.insert("policy_confidence".into(), "0.91".into());
+    ctx.tag("sqli", "lexical");
+    ctx.ml_score = Some(0.97);
+    ctx.ml_label = Some("threat".into());
+
+    let event = PolicyFeedbackEvent::from_context(
+      &ctx,
+      &Decision::block("blocked", BlockCode::SqlInjection),
+      Some("policy"),
+      0.8,
+    )
+    .unwrap();
+
+    assert_eq!(event.policy_action_id, 2);
+    assert_eq!(event.final_decision, "block");
+    assert_eq!(event.decided_by, "policy");
+    assert!(event.has_ml_score);
+    assert_eq!(event.block_code, "SqlInjection");
   }
 }

@@ -26,6 +26,7 @@ nexus-control = { workspace = true }
 nexus-lb = { workspace = true }
 nexus-metrics = { workspace = true }
 nexus-pipeline = { workspace = true }
+nexus-policy = { workspace = true }
 nexus-store = { workspace = true }
 parking_lot = { workspace = true }
 rand = { workspace = true }

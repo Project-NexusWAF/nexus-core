@@ -254,8 +254,14 @@ pub struct PolicyConfig {
   pub rate_limit_seconds: u32,
   #[serde(default = "default_policy_attack_rate_threshold")]
   pub attack_rate_threshold: f32,
-  #[serde(default = "bool_true")]
+  #[serde(default = "bool_false")]
   pub allow_rate_limit_action: bool,
+  #[serde(default = "bool_true")]
+  pub feedback_enabled: bool,
+  #[serde(default = "default_policy_feedback_batch_size")]
+  pub feedback_batch_size: usize,
+  #[serde(default = "default_policy_feedback_flush_ms")]
+  pub feedback_flush_ms: u64,
 }
 
 impl Default for PolicyConfig {
@@ -269,7 +275,10 @@ impl Default for PolicyConfig {
       threshold_step: default_policy_threshold_step(),
       rate_limit_seconds: default_policy_rate_limit_seconds(),
       attack_rate_threshold: default_policy_attack_rate_threshold(),
-      allow_rate_limit_action: true,
+      allow_rate_limit_action: false,
+      feedback_enabled: true,
+      feedback_batch_size: default_policy_feedback_batch_size(),
+      feedback_flush_ms: default_policy_feedback_flush_ms(),
     }
   }
 }
@@ -563,6 +572,18 @@ impl Config {
         reason: "must be greater than 0".into(),
       });
     }
+    if self.policy.feedback_batch_size == 0 {
+      return Err(NexusError::ConfigValidation {
+        field: "policy.feedback_batch_size".into(),
+        reason: "must be greater than 0".into(),
+      });
+    }
+    if self.policy.feedback_flush_ms == 0 {
+      return Err(NexusError::ConfigValidation {
+        field: "policy.feedback_flush_ms".into(),
+        reason: "must be greater than 0".into(),
+      });
+    }
 
     if self.anomaly.window_secs == 0 {
       return Err(NexusError::ConfigValidation {
@@ -719,7 +740,7 @@ fn default_ml_threshold() -> f32 {
   0.8
 }
 fn default_policy_endpoint() -> String {
-  "http://127.0.0.1:50053".into()
+  "http://127.0.0.1:50052".into()
 }
 fn default_policy_timeout_ms() -> u64 {
   2_000
@@ -735,6 +756,12 @@ fn default_policy_rate_limit_seconds() -> u32 {
 }
 fn default_policy_attack_rate_threshold() -> f32 {
   0.3
+}
+fn default_policy_feedback_batch_size() -> usize {
+  64
+}
+fn default_policy_feedback_flush_ms() -> u64 {
+  1_000
 }
 fn default_anomaly_window_secs() -> u64 {
   10
@@ -783,4 +810,7 @@ fn default_flush_ms() -> u64 {
 }
 fn bool_true() -> bool {
   true
+}
+fn bool_false() -> bool {
+  false
 }

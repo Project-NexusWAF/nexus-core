@@ -31,6 +31,58 @@ pub struct StatsSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct PolicyServiceSnapshot {
+  pub enabled: bool,
+  pub endpoint: String,
+  pub status: String,
+  pub model: String,
+  pub feedback_events_total: u64,
+  pub replay_size: u64,
+  pub last_loss: f32,
+  pub online_training_enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyFeedbackEntry {
+  pub request_id: String,
+  pub unix_time_ms: i64,
+  pub policy_action_name: String,
+  pub final_decision: String,
+  pub decided_by: String,
+  pub reward: f32,
+  pub method: String,
+  pub uri: String,
+  pub block_code: String,
+  pub rate_limited: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PolicyEventsQuery {
+  pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PolicyFeedbackPayload {
+  pub events: Vec<PolicyFeedbackEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ManualTrainBody {
+  pub gradient_updates: Option<u32>,
+  pub replay_from_log_limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ManualTrainResponse {
+  pub accepted: bool,
+  pub message: String,
+  pub updates_run: u32,
+  pub replay_size: u64,
+  pub last_loss: f32,
+  pub checkpoint_saved: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct RulesPayload {
   pub found: bool,
   pub version: String,

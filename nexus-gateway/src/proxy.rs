@@ -56,6 +56,16 @@ pub async fn proxy_handler(
   log_pipeline_outcome("proxy", &context, &result);
 
   state.control.requests_total.fetch_add(1, Ordering::Relaxed);
+  if let Some(writer) = &state.policy_feedback {
+    if let Some(event) = nexus_policy::PolicyFeedbackEvent::from_context(
+      &context,
+      &result.decision,
+      result.decided_by.as_deref(),
+      result.final_risk_score,
+    ) {
+      writer.record(event);
+    }
+  }
   if should_record_attack_event(&context, &result.decision) {
     if let Some(writer) = &state.control.log_writer {
       let event = nexus_store::BlockedEvent::from_context(

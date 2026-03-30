@@ -1,18 +1,25 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration as StdDuration;
 
 use anyhow::{bail, Context};
 use chrono::{DateTime, Duration, Utc};
 use nexus_lb::UpstreamStatus;
+use nexus_policy::proto::policy_service_client::PolicyServiceClient;
+use nexus_policy::proto::{
+  HealthRequest as PolicyHealthRequest, ListFeedbackEventsRequest, TrainPolicyRequest,
+};
 use nexus_rules::{Condition, Rule, RuleAction, RuleSet};
 use sqlx::{Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use crate::stats::{
-  AttackLogEntry, ConfigLogEntry, ConfigSnapshot, HealthSnapshot, PaginatedLogs, RuleVersionView,
-  RulesPayload, StatsSnapshot, UpstreamStatusView, GpsCandidateView, SynthesizeRulesBody,
-  SynthesizeRulesResponse,
+  AttackLogEntry, ConfigLogEntry, ConfigSnapshot, GpsCandidateView, HealthSnapshot,
+  ManualTrainBody, ManualTrainResponse, PaginatedLogs, PolicyEventsQuery,
+  PolicyFeedbackEntry, PolicyFeedbackPayload, PolicyServiceSnapshot, RuleVersionView,
+  RulesPayload, StatsSnapshot, SynthesizeRulesBody, SynthesizeRulesResponse,
+  UpstreamStatusView,
 };
 use crate::ControlAppState;
 
@@ -80,8 +87,11 @@ pub fn stats_snapshot(state: &Arc<ControlAppState>) -> StatsSnapshot {
     rate_limited_total: state.rate_limited_total.load(Ordering::Relaxed),
     pipeline_layers: layer_names,
     config_version: state.config_version.load(Ordering::Relaxed),
-    // Placeholder until ML layer exposes circuit state through public API.
-    ml_circuit_state: "unknown".to_string(),
+    ml_circuit_state: if cfg.pipeline.ml_enabled {
+      "enabled".to_string()
+    } else {
+      "disabled".to_string()
+    },
     healthy_upstreams,
     upstreams,
   }
@@ -97,6 +107,149 @@ pub fn config_snapshot(state: &Arc<ControlAppState>) -> ConfigSnapshot {
 
 pub fn list_config_logs(state: &Arc<ControlAppState>) -> Vec<ConfigLogEntry> {
   state.config_log.read().clone()
+}
+
+pub async fn policy_service_snapshot(
+  state: &Arc<ControlAppState>,
+) -> anyhow::Result<PolicyServiceSnapshot> {
+  let cfg = state.live_config.borrow().clone();
+
+  if !cfg.policy.enabled {
+    return Ok(PolicyServiceSnapshot {
+      enabled: false,
+      endpoint: cfg.policy.endpoint.clone(),
+      status: "disabled".to_string(),
+      model: String::new(),
+      feedback_events_total: 0,
+      replay_size: 0,
+      last_loss: 0.0,
+      online_training_enabled: false,
+    });
+  }
+
+  match connect_policy_client(&cfg.policy.endpoint, cfg.policy.timeout_ms).await {
+    Ok(mut client) => {
+      let response = tokio::time::timeout(
+        StdDuration::from_millis(cfg.policy.timeout_ms),
+        client.health(tonic::Request::new(PolicyHealthRequest {})),
+      )
+      .await
+      .context("policy health timeout")?
+      .context("policy health request failed")?
+      .into_inner();
+
+      Ok(PolicyServiceSnapshot {
+        enabled: true,
+        endpoint: cfg.policy.endpoint.clone(),
+        status: if response.ready {
+          "healthy".to_string()
+        } else {
+          "starting".to_string()
+        },
+        model: response.model,
+        feedback_events_total: response.feedback_events_total,
+        replay_size: response.replay_size,
+        last_loss: response.last_loss,
+        online_training_enabled: response.online_training_enabled,
+      })
+    }
+    Err(error) => Ok(PolicyServiceSnapshot {
+      enabled: true,
+      endpoint: cfg.policy.endpoint.clone(),
+      status: format!("unreachable: {}", error),
+      model: String::new(),
+      feedback_events_total: 0,
+      replay_size: 0,
+      last_loss: 0.0,
+      online_training_enabled: false,
+    }),
+  }
+}
+
+pub async fn list_policy_feedback_events(
+  state: &Arc<ControlAppState>,
+  query: PolicyEventsQuery,
+) -> anyhow::Result<PolicyFeedbackPayload> {
+  let cfg = state.live_config.borrow().clone();
+  if !cfg.policy.enabled {
+    return Ok(PolicyFeedbackPayload { events: Vec::new() });
+  }
+
+  let limit = query.limit.unwrap_or(25).clamp(1, 200);
+  let mut client = match connect_policy_client(&cfg.policy.endpoint, cfg.policy.timeout_ms).await {
+    Ok(client) => client,
+    Err(error) => {
+      tracing::warn!(error = %error, "policy feedback listing unavailable");
+      return Ok(PolicyFeedbackPayload { events: Vec::new() });
+    }
+  };
+  let response = match tokio::time::timeout(
+    StdDuration::from_millis(cfg.policy.timeout_ms),
+    client.list_feedback_events(tonic::Request::new(ListFeedbackEventsRequest { limit })),
+  )
+  .await
+  {
+    Ok(Ok(response)) => response.into_inner(),
+    Ok(Err(error)) => {
+      tracing::warn!(error = %error, "policy feedback listing failed");
+      return Ok(PolicyFeedbackPayload { events: Vec::new() });
+    }
+    Err(error) => {
+      tracing::warn!(error = %error, "policy feedback listing timed out");
+      return Ok(PolicyFeedbackPayload { events: Vec::new() });
+    }
+  };
+
+  Ok(PolicyFeedbackPayload {
+    events: response
+      .events
+      .into_iter()
+      .map(|event| PolicyFeedbackEntry {
+        request_id: event.request_id,
+        unix_time_ms: event.unix_time_ms,
+        policy_action_name: event.policy_action_name,
+        final_decision: event.final_decision,
+        decided_by: event.decided_by,
+        reward: event.reward,
+        method: event.method,
+        uri: event.uri,
+        block_code: event.block_code,
+        rate_limited: event.rate_limited,
+      })
+      .collect(),
+  })
+}
+
+pub async fn manual_train_policy(
+  state: &Arc<ControlAppState>,
+  body: ManualTrainBody,
+) -> anyhow::Result<ManualTrainResponse> {
+  let cfg = state.live_config.borrow().clone();
+  if !cfg.policy.enabled {
+    bail!("policy service is disabled in config");
+  }
+
+  let mut client = connect_policy_client(&cfg.policy.endpoint, cfg.policy.timeout_ms).await?;
+  let response = tokio::time::timeout(
+    StdDuration::from_millis(cfg.policy.timeout_ms.max(5_000)),
+    client.train_policy(tonic::Request::new(TrainPolicyRequest {
+      gradient_updates: body.gradient_updates.unwrap_or(25).max(1),
+      replay_from_log_limit: body.replay_from_log_limit.unwrap_or(500),
+    })),
+  )
+  .await
+  .context("manual policy training timeout")?
+  .context("manual policy training failed")?
+  .into_inner();
+
+  Ok(ManualTrainResponse {
+    accepted: response.accepted,
+    message: response.message,
+    updates_run: response.updates_run,
+    replay_size: response.replay_size,
+    last_loss: response.last_loss,
+    checkpoint_saved: response.checkpoint_saved,
+  })
 }
 
 pub async fn get_rules(state: &Arc<ControlAppState>) -> anyhow::Result<RulesPayload> {
@@ -133,6 +286,20 @@ pub async fn update_rules(
 ) -> anyhow::Result<u64> {
   let parsed = validate_rules_content(version, content)?;
   apply_rules_content(state, parsed, content).await
+}
+
+async fn connect_policy_client(
+  endpoint: &str,
+  timeout_ms: u64,
+) -> anyhow::Result<PolicyServiceClient<tonic::transport::Channel>> {
+  let client = tokio::time::timeout(
+    StdDuration::from_millis(timeout_ms.max(500)),
+    PolicyServiceClient::connect(endpoint.to_string()),
+  )
+  .await
+  .context("policy connect timeout")?
+  .context("policy connect failed")?;
+  Ok(client)
 }
 
 pub async fn synthesize_rules(
